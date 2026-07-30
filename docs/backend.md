@@ -15,6 +15,7 @@ See [architecture.md](./architecture.md) for the system view.
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
 | `macos_media.rs` | 189 | `MPNowPlayingInfoCenter` (macOS only) |
+| `linux_media.rs` | 120 | MPRIS2 D-Bus interface (`souvlaki`) (Linux only) |
 
 ### Dependencies of note
 

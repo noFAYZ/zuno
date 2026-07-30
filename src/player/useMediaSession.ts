@@ -27,18 +27,41 @@ const usesNativeWindowsMediaSession =
  */
 const usesNativeMacosMediaSession =
   isTauri() && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+const usesNativeLinuxMediaSession =
+  isTauri() && /Linux/i.test(navigator.userAgent);
 const usesNativeMediaSession =
-  usesNativeWindowsMediaSession || usesNativeMacosMediaSession;
+  usesNativeWindowsMediaSession ||
+  usesNativeMacosMediaSession ||
+  usesNativeLinuxMediaSession;
+
+if (usesNativeMediaSession && typeof navigator !== "undefined" && "mediaSession" in navigator) {
+  try {
+    const dummyMediaSession = {
+      metadata: null,
+      playbackState: "none" as MediaSessionPlaybackState,
+      setActionHandler: () => {},
+      setPositionState: () => {},
+    };
+    Object.defineProperty(navigator, "mediaSession", {
+      get: () => dummyMediaSession,
+      configurable: true,
+    });
+  } catch {
+    // Ignore if navigator.mediaSession is read-only in this environment
+  }
+}
 
 function getNativeMediaCommand(): string | null {
   if (usesNativeWindowsMediaSession) return "update_windows_media_session";
   if (usesNativeMacosMediaSession) return "update_macos_media_session";
+  if (usesNativeLinuxMediaSession) return "update_linux_media_session";
   return null;
 }
 
 function getNativeMediaControlEvent(): string | null {
   if (usesNativeWindowsMediaSession) return "windows-media-control";
   if (usesNativeMacosMediaSession) return "macos-media-control";
+  if (usesNativeLinuxMediaSession) return "linux-media-control";
   return null;
 }
 
@@ -181,6 +204,16 @@ export function useMediaSession(
       }
     };
   }, [controller]);
+
+  useEffect(() => {
+    if (!usesNativeMediaSession || !("mediaSession" in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = "none";
+    } catch {
+      // Ignore if not supported
+    }
+  }, []);
 
   useEffect(() => {
     if (usesNativeMediaSession || !("mediaSession" in navigator)) return;
