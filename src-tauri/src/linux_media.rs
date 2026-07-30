@@ -27,7 +27,7 @@ impl LinuxMediaSession {
         Self(Mutex::new(None))
     }
 
-    fn ensure_controls(&self, app: &AppHandle) -> Result<(), String> {
+    pub fn ensure_controls(&self, app: &AppHandle) -> Result<(), String> {
         let mut controls_guard = self.0.lock().map_err(|e| e.to_string())?;
         if controls_guard.is_some() {
             return Ok(());

@@ -3424,6 +3424,14 @@ pub fn run() {
             if let Err(error) = build_tray(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] tray unavailable: {error}");
             }
+
+            #[cfg(target_os = "linux")]
+            if let Some(session) = app.try_state::<linux_media::LinuxMediaSession>() {
+                if let Err(error) = session.ensure_controls(app.handle()) {
+                    std::eprintln!("[internal][tauri][warn] linux media session init failed: {error}");
+                }
+            }
+
             Ok(())
         })
         .on_window_event(move |window, event| match event {
