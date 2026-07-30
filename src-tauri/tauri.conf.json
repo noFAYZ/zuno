@@ -34,7 +34,8 @@
     "linux": {
       "appimage": {
         "bundleMediaFramework": true
-      }
+      },
+      "category": "AudioVideo;Audio;Music"
     },
     "icon": [
       "icons/32x32.png",
