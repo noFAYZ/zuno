@@ -17,18 +17,32 @@ pub struct MediaSessionUpdate {
     status: String,
     duration_sec: Option<f64>,
     position_sec: Option<f64>,
-    _force_metadata: Option<bool>,
+    force_metadata: Option<bool>,
 }
 
-pub struct LinuxMediaSession(Mutex<Option<MediaControls>>);
+#[derive(PartialEq, Clone)]
+struct CachedMetadata {
+    title: Option<String>,
+    artist: Option<String>,
+    artwork_url: Option<String>,
+    duration: Option<Duration>,
+}
+
+pub struct LinuxMediaSession {
+    controls: Mutex<Option<MediaControls>>,
+    metadata: Mutex<Option<CachedMetadata>>,
+}
 
 impl LinuxMediaSession {
     pub fn new() -> Self {
-        Self(Mutex::new(None))
+        Self {
+            controls: Mutex::new(None),
+            metadata: Mutex::new(None),
+        }
     }
 
     pub fn ensure_controls(&self, app: &AppHandle) -> Result<(), String> {
-        let mut controls_guard = self.0.lock().map_err(|e| e.to_string())?;
+        let mut controls_guard = self.controls.lock().map_err(|e| e.to_string())?;
         if controls_guard.is_some() {
             return Ok(());
         }
@@ -80,7 +94,7 @@ impl LinuxMediaSession {
     pub fn update(&self, app: &AppHandle, update: MediaSessionUpdate) -> Result<(), String> {
         self.ensure_controls(app)?;
 
-        let mut controls_guard = self.0.lock().map_err(|e| e.to_string())?;
+        let mut controls_guard = self.controls.lock().map_err(|e| e.to_string())?;
         let controls = match controls_guard.as_mut() {
             Some(c) => c,
             None => return Ok(()),
@@ -105,23 +119,37 @@ impl LinuxMediaSession {
             .set_playback(playback)
             .map_err(|e| e.to_string())?;
 
-        // Update metadata
+        // Update metadata only when metadata changes or force_metadata is true
         let duration = update
             .duration_sec
             .filter(|&d| d > 0.0)
             .map(Duration::from_secs_f64);
 
-        let metadata = MediaMetadata {
-            title: update.title.as_deref(),
-            artist: update.artist.as_deref(),
-            album: None,
-            cover_url: update.artwork_url.as_deref(),
+        let next_metadata = CachedMetadata {
+            title: update.title.clone(),
+            artist: update.artist.clone(),
+            artwork_url: update.artwork_url.clone(),
             duration,
         };
 
-        controls
-            .set_metadata(metadata)
-            .map_err(|e| e.to_string())?;
+        let force_metadata = update.force_metadata.unwrap_or(false);
+        let mut current_metadata = self.metadata.lock().map_err(|e| e.to_string())?;
+
+        if force_metadata || current_metadata.as_ref() != Some(&next_metadata) {
+            let metadata = MediaMetadata {
+                title: update.title.as_deref(),
+                artist: update.artist.as_deref(),
+                album: None,
+                cover_url: update.artwork_url.as_deref(),
+                duration,
+            };
+
+            controls
+                .set_metadata(metadata)
+                .map_err(|e| e.to_string())?;
+
+            *current_metadata = Some(next_metadata);
+        }
 
         Ok(())
     }

@@ -1563,12 +1563,8 @@ export default function App() {
         return;
       }
 
-      const isMediaPlayPause = event.code === "MediaPlayPause" || event.key === "MediaPlayPause" || event.key === "MediaPlay" || event.key === "AudioPlay";
-      const isMediaNext = event.code === "MediaTrackNext" || event.key === "MediaTrackNext" || event.key === "MediaNext" || event.key === "AudioNext";
-      const isMediaPrev = event.code === "MediaTrackPrevious" || event.key === "MediaTrackPrevious" || event.key === "MediaPrevious" || event.key === "AudioPrev";
-
       if (
-        (eventMatchesShortcut(event, keyboardShortcuts.playPause) || isMediaPlayPause)
+        eventMatchesShortcut(event, keyboardShortcuts.playPause)
         && playerState.currentTrack
         && playerState.status !== "loading"
       ) {
@@ -1592,7 +1588,7 @@ export default function App() {
       }
 
       if (
-        (eventMatchesShortcut(event, keyboardShortcuts.previousTrack) || isMediaPrev)
+        eventMatchesShortcut(event, keyboardShortcuts.previousTrack)
         && playerState.currentTrack
         && playerState.status !== "loading"
       ) {
@@ -1602,7 +1598,7 @@ export default function App() {
       }
 
       if (
-        (eventMatchesShortcut(event, keyboardShortcuts.nextTrack) || isMediaNext)
+        eventMatchesShortcut(event, keyboardShortcuts.nextTrack)
         && playerState.currentTrack
         && playerState.status !== "loading"
       ) {

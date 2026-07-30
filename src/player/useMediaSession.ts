@@ -34,22 +34,7 @@ const usesNativeMediaSession =
   usesNativeMacosMediaSession ||
   usesNativeLinuxMediaSession;
 
-if (usesNativeMediaSession && typeof navigator !== "undefined" && "mediaSession" in navigator) {
-  try {
-    const dummyMediaSession = {
-      metadata: null,
-      playbackState: "none" as MediaSessionPlaybackState,
-      setActionHandler: () => {},
-      setPositionState: () => {},
-    };
-    Object.defineProperty(navigator, "mediaSession", {
-      get: () => dummyMediaSession,
-      configurable: true,
-    });
-  } catch {
-    // Ignore if navigator.mediaSession is read-only in this environment
-  }
-}
+
 
 function getNativeMediaCommand(): string | null {
   if (usesNativeWindowsMediaSession) return "update_windows_media_session";
