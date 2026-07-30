@@ -40,6 +40,48 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+/* Transport glyphs are solid — a hairline triangle reads as an arrow, not a play button. */
+export function PlayIcon(props: IconProps) {
+  return (
+    <Icon fill="currentColor" stroke="none" {...props}>
+      <path d="M8 5.2v13.6a1 1 0 0 0 1.53.85l10.6-6.8a1 1 0 0 0 0-1.7L9.53 4.35A1 1 0 0 0 8 5.2Z" />
+    </Icon>
+  );
+}
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <Icon fill="currentColor" stroke="none" {...props}>
+      <rect x="6.5" y="4.5" width="4" height="15" rx="1.4" />
+      <rect x="13.5" y="4.5" width="4" height="15" rx="1.4" />
+    </Icon>
+  );
+}
+
+/** One glyph, two states: the waves are dropped when muted rather than drawing a second icon. */
+export function SpeakerIcon({ muted, ...props }: IconProps & { muted?: boolean }) {
+  return (
+    <Icon {...props}>
+      <path
+        d="M4 9.5h3l4.3-3.6a.8.8 0 0 1 1.3.6v11a.8.8 0 0 1-1.3.6L7 14.5H4a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1Z"
+        fill="currentColor"
+        stroke="none"
+      />
+      {muted ? (
+        <>
+          <path d="m17 10 4 4" />
+          <path d="m21 10-4 4" />
+        </>
+      ) : (
+        <>
+          <path d="M16.5 9.5a3.5 3.5 0 0 1 0 5" />
+          <path d="M19 7a7 7 0 0 1 0 10" />
+        </>
+      )}
+    </Icon>
+  );
+}
+
 export function CheckIcon(props: IconProps) {
   return (
     <Icon {...props}>

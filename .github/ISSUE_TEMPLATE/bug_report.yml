@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in the app is broken or behaves wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you did, what you expected, and what you got instead.
+      placeholder: |
+        1. Opened a playlist
+        2. Clicked the third video
+        3. Player stays black, audio plays
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Zuno version
+      description: Settings → About, or the installer filename.
+      placeholder: "1.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: |
+        `current.log` from the log directory — it usually says what failed.
+        Windows: `%LOCALAPPDATA%\com.zuno.desktop\logs`
+        macOS: `~/Library/Logs/com.zuno.desktop`
+        Linux: `~/.local/share/com.zuno.desktop/logs`
+      render: text

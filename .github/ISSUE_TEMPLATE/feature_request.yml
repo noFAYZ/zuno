@@ -1,0 +1,17 @@
+name: Feature request
+description: Suggest something Zuno should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Zuno makes hard or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. A rough idea is fine — the problem above matters more.

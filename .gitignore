@@ -36,10 +36,11 @@ dist-ssr
 
 # Rust application lockfiles should be committed for reproducible builds.
 
-.vscode/*
-
 outputs/*
 .codex/*
+
+# Crash droppings from the Git-for-Windows shell.
+*.stackdump
 
 # Updater signing keys. `tauri signer generate -w ~/...` does not expand `~` on
 # Windows and drops a literal `~/` folder in the repo root — this makes sure a
@@ -47,6 +48,15 @@ outputs/*
 ~/
 *.key
 !**/*.key.pub
+
+# Secrets. `*.local` above already covers `.env.local`, but not a plain `.env` —
+# which is the one people actually create in a hurry.
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
 
 # Reference dumps and working images kept in docs/ for local use only. The committed
 # documentation (architecture.md, backend.md, frontend.md, solarIcons.md) and the README's

@@ -1,0 +1,33 @@
+# Dependency updates. Monthly, grouped into one PR per ecosystem — zuno has a single
+# maintainer, and a weekly drip of five separate PRs is how update PRs get ignored.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /landing
+    schedule:
+      interval: monthly
+    groups:
+      landing:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  # Ungrouped: an action bump is one line and worth reading on its own.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

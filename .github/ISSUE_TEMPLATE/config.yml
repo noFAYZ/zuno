@@ -1,0 +1,11 @@
+# Blank issues stay on: not every report fits a form, and a bad-fit form is how a real
+# bug turns into no report at all.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/noFAYZ/zuno/security/advisories/new
+    about: Report privately, not as a public issue. See SECURITY.md for scope.
+
+  - name: Question or help using Zuno
+    url: https://github.com/noFAYZ/zuno/discussions/new?category=q-a
+    about: Not sure whether it is a bug? Ask here — it can be moved to an issue.

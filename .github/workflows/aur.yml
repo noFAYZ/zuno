@@ -17,6 +17,10 @@ on:
         description: "Version to publish, without the leading v (e.g. 1.2.1)"
         required: true
 
+# Publishing happens over SSH to the AUR, not through the GitHub token.
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest

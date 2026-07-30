@@ -16,6 +16,10 @@ on:
       - "packaging/flatpak/**"
       - ".github/workflows/flatpak.yml"
 
+# Artifacts upload without repo write access.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
