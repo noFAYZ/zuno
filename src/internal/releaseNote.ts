@@ -10,11 +10,13 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `This is the last major update for a while, with a lot of new features and bug fixes. I'll be away for a bit, but I'll still ship patches for anything critical.
+export const RELEASE_NOTE_BODY = `Tracks start noticeably faster this time, and skipping ahead is close to instant.
 
-Come say hello at /r/myzuno, and report anything broken on GitHub.
+Settings now has a native audio engine you can switch to — it drops the hidden YouTube frame and about 90 MB with it. You can also let Zuno add plays to your YouTube Music history, and albums show in track lists with a link straight to them.
 
-Thank you, and enjoy :)`;
+Report anything broken on GitHub, or come say hello at /r/myzuno.
+
+Thanks :)`;
 
 export type ReleaseNoteSegment =
   | { kind: "text"; value: string }
