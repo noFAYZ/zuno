@@ -24,8 +24,14 @@ interface PlayerBarProps {
   handlePlayerBarClick:()=>void;
 }
 
+/*
+ * Two endpoints so one being blocked does not read as "offline", and both answer 204 with an
+ * empty body. This used to lead with `https://music.youtube.com/`, which is 380 KB of HTML
+ * fetched only to prove the network exists — and `allSettled` requests both, so every check
+ * paid for it. gstatic keeps the "can we reach Google" signal at zero bytes.
+ */
 const CONNECTION_CHECK_URLS = [
-  "https://music.youtube.com/",
+  "https://www.gstatic.com/generate_204",
   "https://cp.cloudflare.com/generate_204",
 ];
 

@@ -2269,6 +2269,30 @@ const OFFLINE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 /// modest so a download does not starve playback of the same connection.
 const OFFLINE_CHUNK_CONCURRENCY: usize = 6;
 
+/**
+ * Smallest total worth splitting, and the floor on a range.
+ *
+ * Chunking a file below this buys nothing: the per-request overhead is a larger share than the
+ * parallelism recovers.
+ */
+const AUDIO_MIN_CHUNK_BYTES: u64 = 512 * 1024;
+
+/**
+ * Range size for a given total.
+ *
+ * Aims for roughly `OFFLINE_CHUNK_CONCURRENCY` ranges so the whole file is in flight at once,
+ * floored so a small file does not become a swarm of tiny requests and capped so a large one
+ * does not become a handful of huge ones.
+ *
+ * A fixed 4 MiB was both the range size *and* the threshold, which meant a typical song — 2 to
+ * 4 MB of Opus — fell under it and took the single sequential stream this exists to avoid.
+ */
+fn audio_chunk_size(total: u64) -> u64 {
+    (total / OFFLINE_CHUNK_CONCURRENCY as u64)
+        .max(AUDIO_MIN_CHUNK_BYTES)
+        .min(OFFLINE_CHUNK_BYTES)
+}
+
 fn offline_http_client(request_url: &url::Url) -> Result<reqwest::Client, CommandError> {
     let mut client_builder = reqwest::Client::builder();
     if let Some(local_address) = signed_googlevideo_local_address(request_url) {
@@ -2407,11 +2431,8 @@ async fn offline_audio_save(
     track_id: String,
     cookie: Option<String>,
 ) -> Result<u64, CommandError> {
-    use futures_util::stream::StreamExt;
-
     let request_url = url::Url::parse(&url)
         .map_err(|error| cache_error(format!("audio URL parse failed: {error}")))?;
-    let client = offline_http_client(&request_url)?;
     let started_at = Instant::now();
 
     /*
@@ -2428,100 +2449,12 @@ async fn offline_audio_save(
         track_id, url
     );
 
-    /*
-     * `clen` rather than a probe request. A `range=` query is answered with 200 and just that
-     * slice — there is no 206 and no Content-Range — so the response cannot report the total
-     * size and the old probe-and-inspect dance has nothing left to inspect. The URL states the
-     * length itself, and it is covered by the signature, so it cannot disagree with the file.
-     */
     let total_bytes = signed_content_length(&request_url).unwrap_or(0);
-
     let mut last_percent: u8 = 0;
-    let mut bytes: Vec<u8>;
-
-    if total_bytes > OFFLINE_CHUNK_BYTES {
-        let mut received = 0u64;
-
-        let mut ranges = Vec::new();
-        let mut start = 0u64;
-        while start < total_bytes {
-            let end = (start + OFFLINE_CHUNK_BYTES - 1).min(total_bytes - 1);
-            ranges.push((start, end));
-            start = end + 1;
-        }
-
-        let mut chunks: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ranges.len());
-        let mut stream = futures_util::stream::iter(ranges.into_iter().map(|(start, end)| {
-            let client = client.clone();
-            let url = url.clone();
-            let cookie = cookie.clone();
-            async move {
-                let response =
-                    googlevideo_audio_request(&client, &audio_url_with_range(&url, start, end), cookie.as_deref())
-                        .send()
-                        .await
-                        .map_err(|error| {
-                            cache_error(format!("audio range request failed: {error}"))
-                        })?;
-                if !response.status().is_success() {
-                    return Err(cache_error(format!("range returned {}", response.status())));
-                }
-                let body = response
-                    .bytes()
-                    .await
-                    .map_err(|error| cache_error(format!("audio range read failed: {error}")))?;
-                Ok::<(u64, Vec<u8>), CommandError>((start, body.to_vec()))
-            }
-        }))
-        .buffer_unordered(OFFLINE_CHUNK_CONCURRENCY);
-
-        let mut chunk_error: Option<CommandError> = None;
-        while let Some(result) = stream.next().await {
-            let (start, body) = match result {
-                Ok(value) => value,
-                Err(error) => {
-                    chunk_error = Some(error);
-                    break;
-                }
-            };
-            received += body.len() as u64;
-            emit_offline_progress(&app, &track_id, received, total_bytes, &mut last_percent);
-            chunks.push((start, body));
-        }
-
-        // One refused chunk invalidates the whole assembly, so restart on the proven path
-        // instead of writing a file with a hole in it.
-        if let Some(error) = chunk_error {
-            eprintln!(
-                "[internal][tauri][warn] offline_audio_save chunk failed ({}) falling back",
-                error.message
-            );
-            let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
-            if whole.is_empty() {
-                return Err(cache_error("audio download returned no data"));
-            }
-            return write_offline_entry(&app, &track_id, &whole, started_at, false);
-        }
-
-        // Ranges complete out of order, so the file is reassembled by offset.
-        chunks.sort_by_key(|(start, _)| *start);
-        bytes = Vec::with_capacity(total_bytes as usize);
-        for (_, body) in chunks {
-            bytes.extend_from_slice(&body);
-        }
-    } else {
-        // Small enough for one request, or `clen` was absent and there is nothing to chunk by.
-        let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
-        bytes = whole;
-        let received = bytes.len() as u64;
-        emit_offline_progress(
-            &app,
-            &track_id,
-            received,
-            if total_bytes > 0 { total_bytes } else { received },
-            &mut last_percent,
-        );
-    }
+    let bytes = fetch_audio_ranged(&url, &track_id, cookie.as_deref(), |received, total| {
+        emit_offline_progress(&app, &track_id, received, total, &mut last_percent);
+    })
+    .await?;
 
     if bytes.is_empty() {
         return Err(cache_error("audio download returned no data"));
@@ -2534,7 +2467,127 @@ async fn offline_audio_save(
         )));
     }
 
-    write_offline_entry(&app, &track_id, &bytes, started_at, total_bytes > OFFLINE_CHUNK_BYTES)
+    write_offline_entry(&app, &track_id, &bytes, started_at, total_bytes > AUDIO_MIN_CHUNK_BYTES)
+}
+
+/**
+ * Downloads a signed audio URL, in parallel ranges whenever the size is known.
+ *
+ * googlevideo throttles a single sequential stream hard, which is why one whole-file request
+ * takes far longer than the same bytes fetched as several ranges at once. Shared by the
+ * offline store and by native playback so the two cannot drift apart on speed — playback used
+ * the slow path while the download feature used this one, and a skip paid for the difference.
+ *
+ * `on_progress` receives `(received, total)`. Playback passes a closure that does nothing.
+ */
+async fn fetch_audio_ranged(
+    url: &str,
+    track_id: &str,
+    cookie: Option<&str>,
+    mut on_progress: impl FnMut(u64, u64),
+) -> Result<Vec<u8>, CommandError> {
+    use futures_util::stream::StreamExt;
+
+    let request_url = url::Url::parse(url)
+        .map_err(|error| cache_error(format!("audio URL parse failed: {error}")))?;
+
+    /*
+     * `clen` rather than a probe request. A `range=` query is answered with 200 and just that
+     * slice — there is no 206 and no Content-Range — so the response cannot report the total
+     * size. The URL states the length itself, and it is covered by the signature, so it cannot
+     * disagree with the file.
+     */
+    let total_bytes = signed_content_length(&request_url).unwrap_or(0);
+
+    // Small enough for one request, or `clen` was absent and there is nothing to chunk by.
+    if total_bytes <= AUDIO_MIN_CHUNK_BYTES {
+        let whole = fetch_audio_bytes(
+            url.to_string(),
+            track_id.to_string(),
+            cookie.map(str::to_string),
+        )
+        .await?;
+        let received = whole.len() as u64;
+        on_progress(received, if total_bytes > 0 { total_bytes } else { received });
+        return Ok(whole);
+    }
+
+    let client = offline_http_client(&request_url)?;
+
+    let chunk_size = audio_chunk_size(total_bytes);
+    let mut ranges = Vec::new();
+    let mut start = 0u64;
+    while start < total_bytes {
+        let end = (start + chunk_size - 1).min(total_bytes - 1);
+        ranges.push((start, end));
+        start = end + 1;
+    }
+
+    let mut chunks: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ranges.len());
+    let mut received = 0u64;
+    let mut stream = futures_util::stream::iter(ranges.into_iter().map(|(start, end)| {
+        let client = client.clone();
+        let url = url.to_string();
+        let cookie = cookie.map(str::to_string);
+        async move {
+            let response = googlevideo_audio_request(
+                &client,
+                &audio_url_with_range(&url, start, end),
+                cookie.as_deref(),
+            )
+            .send()
+            .await
+            .map_err(|error| cache_error(format!("audio range request failed: {error}")))?;
+            if !response.status().is_success() {
+                return Err(cache_error(format!("range returned {}", response.status())));
+            }
+            let body = response
+                .bytes()
+                .await
+                .map_err(|error| cache_error(format!("audio range read failed: {error}")))?;
+            Ok::<(u64, Vec<u8>), CommandError>((start, body.to_vec()))
+        }
+    }))
+    .buffer_unordered(OFFLINE_CHUNK_CONCURRENCY);
+
+    let mut chunk_error: Option<CommandError> = None;
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok((start, body)) => {
+                received += body.len() as u64;
+                on_progress(received, total_bytes);
+                chunks.push((start, body));
+            }
+            Err(error) => {
+                chunk_error = Some(error);
+                break;
+            }
+        }
+    }
+    drop(stream);
+
+    // One refused chunk invalidates the whole assembly, so restart on the proven path instead
+    // of returning a buffer with a hole in it.
+    if let Some(error) = chunk_error {
+        eprintln!(
+            "[internal][tauri][warn] fetch_audio_ranged chunk failed ({}) falling back track_id={}",
+            error.message, track_id
+        );
+        return fetch_audio_bytes(
+            url.to_string(),
+            track_id.to_string(),
+            cookie.map(str::to_string),
+        )
+        .await;
+    }
+
+    // Ranges complete out of order, so the buffer is reassembled by offset.
+    chunks.sort_by_key(|(start, _)| *start);
+    let mut bytes = Vec::with_capacity(total_bytes as usize);
+    for (_, body) in chunks {
+        bytes.extend_from_slice(&body);
+    }
+    Ok(bytes)
 }
 
 /// Commits a completed download to the offline store.
@@ -2701,8 +2754,15 @@ async fn fetch_audio_source(
     mime_type: String,
     cookie: Option<String>,
 ) -> Result<AudioSourcePayload, CommandError> {
-    let bytes = fetch_audio_bytes(url, track_id.clone(), cookie).await?;
-    if bytes.len() >= 12 && &bytes[4..8] != b"ftyp" {
+    // Ranged, same as the offline store: this is the path a skip waits on, and one sequential
+    // stream is the thing googlevideo throttles.
+    let bytes = fetch_audio_ranged(&url, &track_id, cookie.as_deref(), |_, _| {}).await?;
+    /*
+     * Only meaningful for MP4. `resolveStreamUrl` falls back to Opus-in-WebM when a track has
+     * no AAC at all, and "high" now ranks across every audio format — so this check has to
+     * follow what was actually asked for rather than assume a container.
+     */
+    if mime_type.contains("mp4") && bytes.len() >= 12 && &bytes[4..8] != b"ftyp" {
         let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]).replace('\n', " ");
         return Err(CommandError {
             message: format!("Audio download was not an MP4 file. Response started with: {preview}"),
@@ -3654,11 +3714,26 @@ mod tests {
     use super::{
         apply_set_cookie, audio_url_with_range, cookie_account_identity, cookie_domain_matches,
         is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
-        serialize_cookie_pairs, signed_content_length, store_media_item, MediaItem,
-        MEDIA_SERVER_MAX_ITEMS,
+        audio_chunk_size, serialize_cookie_pairs, signed_content_length, store_media_item,
+        MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    /// A typical song is 2-4 MB. A fixed 4 MiB range size meant exactly those never split at
+    /// all, which is why a skip waited on the one throttled stream this is meant to avoid.
+    #[test]
+    fn audio_chunk_size_splits_a_song_and_bounds_the_extremes() {
+        let song = 2_562_800_u64;
+        let size = audio_chunk_size(song);
+        assert!(size >= AUDIO_MIN_CHUNK_BYTES);
+        assert!(song.div_ceil(size) > 1, "a song must split into several ranges");
+
+        // Tiny files stay at the floor rather than becoming a swarm of requests.
+        assert_eq!(audio_chunk_size(600_000), AUDIO_MIN_CHUNK_BYTES);
+        // Large files stay capped rather than becoming a few huge ones.
+        assert_eq!(audio_chunk_size(500 * 1024 * 1024), OFFLINE_CHUNK_BYTES);
+    }
 
     /// The guard on the leak: this map was insert-only, so every song ever played stayed in
     /// memory for the life of the process.

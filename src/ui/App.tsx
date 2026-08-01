@@ -908,9 +908,15 @@ export default function App() {
     });
   };
 
-  const handleConnectionRestored = async () => {
+  /*
+   * Memoized because `PlayerBar` hangs its whole connectivity chain off this identity:
+   * `updateConnectionState` → `checkConnection` → the effect that calls it on mount. A fresh
+   * function each render re-ran that effect on every render, firing a live connectivity probe
+   * each time — several per track change.
+   */
+  const handleConnectionRestored = useCallback(async () => {
     await libraryController.recoverConnection();
-  };
+  }, []);
 
   const handleNavigatePlaylist = (playlist: Playlist) => {
     playerUIStore.setLyricsOpen(false);

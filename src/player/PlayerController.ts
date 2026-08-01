@@ -1,4 +1,4 @@
-import type { DataSource } from "../datasource/DataSource";
+import type { DataSource, StreamData } from "../datasource/DataSource";
 import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { AudioEngine } from "./AudioEngine";
@@ -172,6 +172,9 @@ export class PlayerController {
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private shuffleEnabled = false;
   private isPlaylistMode = false;
+  /** Audio resolved ahead of time for the next track, claimed by `ensureTrackLoaded`. */
+  private warmedStream: { trackId: string; data: StreamData } | null = null;
+  private warmingStream = false;
   private crossfadeSec = 0;
   private gaplessEnabled = true;
   private transitionTimerId: number | null = null;
@@ -1087,8 +1090,14 @@ export class PlayerController {
        */
       const isDownloaded = isTrackDownloaded(track.id);
       const useNativeAudio = this.audioEngine.usesNativeAudio() || isDownloaded;
+      /*
+       * A warmed track skips the whole resolve-and-download round trip, which is the entire
+       * wait a listener feels when they press next. Claimed rather than read: it is one slot,
+       * and holding it after use would keep a stale URL alive for a track already playing.
+       */
+      const warmed = this.claimWarmedStream(track.id);
       const audioData = useNativeAudio
-        ? await this.dataSource.getStreamData?.(track)
+        ? warmed ?? await this.dataSource.getStreamData?.(track)
         : undefined;
       if (useNativeAudio && !audioData) {
         throw new Error("The data source does not support native audio playback.");
@@ -1118,7 +1127,11 @@ export class PlayerController {
       logInternalInfo("PlayerController.ensureTrackLoaded success", {
         trackId: track.id,
         durationMs: Math.round(performance.now() - startedAt),
+        warmed: Boolean(warmed),
       });
+      // Start on the next one immediately rather than near the end of this track: a skip lands
+      // whenever the listener decides it does, not only in the last few seconds.
+      this.warmNextTrack();
     } catch (error) {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
@@ -1161,6 +1174,67 @@ export class PlayerController {
     const next = this.queue.all[this.queue.currentIndex + 1] ?? null;
     if (!next || next.id === this.state.currentTrack?.id) return null;
     return next;
+  }
+
+  /**
+   * Warms whatever the next track will need: its metadata always, its audio on the native engine.
+   *
+   * The native engine has no standby deck, so without this every skip pays for a PO token, an
+   * InnerTube `player` call and a whole-file download before the first sample — seconds of
+   * silence after a button press. One slot is enough: it is only ever the track after the one
+   * playing, and the media server holds three.
+   *
+   * Failures are swallowed on purpose. This is an optimisation; if it does not land,
+   * `ensureTrackLoaded` fetches normally and the listener waits exactly as long as before.
+   */
+  private warmNextTrack(): void {
+    const next = this.peekNextTrack();
+    if (!next) return;
+
+    /*
+     * Metadata first, and for both engines.
+     *
+     * `playTrackById` awaits `getTrack` before it reaches the audio at all, so a cache miss
+     * there is a wait no amount of warmed audio can hide — it was 775ms of a 918ms skip, with
+     * the bytes already sitting ready. `getTrack` is stale-while-revalidate, so this only ever
+     * costs the one request the skip would have made anyway, moved earlier.
+     */
+    if (next.source === "youtube") {
+      void this.dataSource.getTrack(next.id).catch(() => {
+        // Best effort. `playTrackById` still fetches it for real, and reports its own failure.
+      });
+    }
+
+    if (!this.audioEngine.usesNativeAudio()) return;
+    if (!this.dataSource.getStreamData) return;
+    if (this.warmingStream) return;
+    // Local files and downloads are read from disk; there is no network wait to hide.
+    if (next.source === "local" || isTrackDownloaded(next.id)) return;
+    if (this.warmedStream?.trackId === next.id) return;
+
+    const getStreamData = this.dataSource.getStreamData.bind(this.dataSource);
+    this.warmingStream = true;
+    void getStreamData(next)
+      .then((data) => {
+        this.warmedStream = { trackId: next.id, data };
+        logInternalDebug("PlayerController.warmNextTrack audio ready", { trackId: next.id });
+      })
+      .catch((error) => {
+        logInternalWarn("PlayerController.warmNextTrack audio failed", {
+          trackId: next.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.warmingStream = false;
+      });
+  }
+
+  /** Takes the warmed stream if it is for this track, and empties the slot either way. */
+  private claimWarmedStream(trackId: string): StreamData | undefined {
+    const warmed = this.warmedStream;
+    this.warmedStream = null;
+    return warmed?.trackId === trackId ? warmed.data : undefined;
   }
 
   /**

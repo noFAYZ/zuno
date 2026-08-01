@@ -2758,7 +2758,21 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalInfo("YouTubeMusicDataSource.restoreSession credential loaded", {
         credentialBytes: this.musicCookie.length,
       });
-      this.resetMusicSessionSelection();
+      /*
+       * Clients only — the same reasoning `refreshSession` documents: reading back a stored
+       * credential is the same person on the same channel.
+       *
+       * This used to call `resetMusicSessionSelection()`, which deletes the saved channel. It
+       * runs on every launch, so a brand account chosen in Settings survived exactly as long as
+       * the process did: on the next start the preference was gone before
+       * `findBestLibraryResponses` could read it, and the automatic probe put the user back on
+       * whichever channel holds the most library content. Wiping the selection belongs to
+       * sign-out and to a sign-in that lands on a different Google account, which both still do it.
+       *
+       * The in-memory half of that reset was a no-op here anyway: on a fresh process the account
+       * fields are already the values it assigns.
+       */
+      this.resetMusicClients();
       await this.getMusicClient();
       logInternalInfo("YouTubeMusicDataSource.restoreSession success");
       return true;
@@ -5274,7 +5288,16 @@ export class YouTubeMusicDataSource extends DataSource {
         const mp4Formats = audioFormats.filter(
           (candidate: any) => candidate.mime_type.includes("audio/mp4"),
         );
-        const candidates = mp4Formats.length > 0 ? mp4Formats : audioFormats;
+        /*
+         * "Best available" has to mean it. The MP4 preference used to be applied before the
+         * quality ranking, so `high` never saw the Opus tier — on a typical track that pinned
+         * it to itag 140 at ~128 kbps while itag 251 sat there at ~160, higher bitrate *and*
+         * better per bit. `low` and `normal` keep preferring MP4: they are picking a small file
+         * and AAC is the safer container to hand a media element.
+         */
+        const candidates = quality === "high" || mp4Formats.length === 0
+          ? audioFormats
+          : mp4Formats;
         const format = selectFormatForQuality(candidates as Array<{ bitrate?: number }>, quality) as
           | (typeof candidates)[number]
           | undefined;
