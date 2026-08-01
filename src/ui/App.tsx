@@ -872,6 +872,24 @@ export default function App() {
    * error, since the query is already the thing the listener asked about.
    */
   const handleNavigateAlbumForTrack = async (track: Track) => {
+    /*
+     * The linked id, whenever the row carried one.
+     *
+     * Searching for "<album> <artist>" and taking the first hit is a guess, and it guesses
+     * wrong on compilations, remasters and singles that share a title. The id names the album
+     * outright — the header fills itself in once the page loads, the same way a pasted album
+     * link is handled.
+     */
+    if (track.albumId) {
+      handleNavigateAlbum({
+        id: track.albumId,
+        title: track.album ?? "Album",
+        artist: track.artist ?? "",
+        artworkUrl: track.artworkUrl,
+      });
+      return;
+    }
+
     const query = [track.album, track.artist].filter(Boolean).join(" ").trim();
     if (!query) return;
 

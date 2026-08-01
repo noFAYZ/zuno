@@ -14,6 +14,13 @@ export interface Track {
   artist: string;
   artists?: ArtistReference[];
   album?: string;
+  /**
+   * Browse id of `album`, when the row linked to one.
+   *
+   * Navigating by name means searching and taking the best guess, which lands on compilations
+   * and remasters. With this the album opens directly.
+   */
+  albumId?: string;
   durationSec?: number;
   artworkUrl?: string;
   playlistItemId?: string;

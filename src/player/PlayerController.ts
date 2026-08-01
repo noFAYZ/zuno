@@ -4,6 +4,7 @@ import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } 
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
 import { recordPlay } from "./playHistory";
+import { computeQueueWindow } from "./queueWindow";
 import { getOfflineTrack, isTrackDownloaded } from "./offlineStore";
 import { DiscordRpcService } from "./DiscordRPC";
 import {
@@ -217,16 +218,31 @@ export class PlayerController {
     return this.state;
   }
 
+  /** See `queueWindow.ts` — the slice, and the indices rebased onto it. */
+  private exportQueueWindow(): Pick<
+    PlayerSession,
+    "queue" | "queueIndex" | "manualQueueLength" | "stopAfterQueueIndex"
+  > {
+    const all = this.queue.all;
+    const window = computeQueueWindow(
+      all.length,
+      this.queue.currentIndex,
+      this.stopAfterTrack ? all.indexOf(this.stopAfterTrack) : -1,
+    );
+
+    return {
+      queue: all.slice(window.from, window.to),
+      queueIndex: window.queueIndex,
+      manualQueueLength: this.queue.queuedManually,
+      stopAfterQueueIndex: window.stopAfterQueueIndex,
+    };
+  }
+
   exportSession(): PlayerSession {
     return {
       currentTrack: this.state.currentTrack,
       history: this.state.history.slice(-100),
-      queue: [...this.queue.all],
-      queueIndex: this.queue.currentIndex,
-      manualQueueLength: this.queue.queuedManually,
-      stopAfterQueueIndex: this.stopAfterTrack
-        ? this.queue.all.indexOf(this.stopAfterTrack)
-        : null,
+      ...this.exportQueueWindow(),
       status: this.state.currentTrack
         ? (this.state.status === "playing" ? "playing" : "paused")
         : "idle",
@@ -369,9 +385,6 @@ export class PlayerController {
         this.queue.set([...playbackQueue], startIndex >= 0 ? startIndex : 0);
         this.autoplayEnabled = autoplayWhenQueueEnds;
         this.isPlaylistMode = !autoplayWhenQueueEnds && playbackQueue.length > 1;
-        if (this.isPlaylistMode) {
-          this.queue.setSourceTracks([...playbackQueue]);
-        }
       }
 
       const queuedTrack = playbackQueue?.find((item) => item.id === videoId)

@@ -325,7 +325,8 @@ const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist
  */
 // v10: album names are no longer guessed from whatever column was left over, so entries
 // parsed under the old rule carry release years and play counts where an album should be.
-const LIBRARY_CACHE_KEY = "youtube-music:library:v10";
+// v11: tracks now carry `albumId`, so entries parsed before it have no album to open.
+const LIBRARY_CACHE_KEY = "youtube-music:library:v11";
 /** The account the user picked by hand, which outranks the automatic probe. */
 /**
  * Content playback nonce — 16 characters from the alphabet YouTube's own player draws on.
@@ -343,10 +344,10 @@ function createPlaybackNonce(): string {
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 // v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
 // channel avatar — so anything cached under the older shape-and-crop rules has to go.
-const ARTIST_CACHE_VERSION = "v8";
+const ARTIST_CACHE_VERSION = "v9";
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
-const PLAYLIST_TRACK_CACHE_VERSION = "v5";
+const PLAYLIST_TRACK_CACHE_VERSION = "v6";
 const PLAYLIST_EMPTY_RETRY_DELAYS_MS = [0, 600, 1_500];
 
 class YouTubeMusicAuthError extends AuthExpiredError {}
@@ -910,12 +911,25 @@ export class YouTubeMusicDataSource extends DataSource {
    * often than a guess: a single, a video or a user upload genuinely has no album, and the
    * linked column is present whenever one does.
    */
-  private getTrackAlbumName(item: MusicItem): string | undefined {
+  /**
+   * The album a row belongs to: its name *and* the id behind the link.
+   *
+   * The id is the point. `isAlbumColumn` already has to find a browse id to decide the column
+   * is an album at all, and throwing it away meant opening an album from a row had to search
+   * for `"<album> <artist>"` and hope the first hit was right — which lands on compilations,
+   * remasters and same-named singles often enough to be wrong in normal use.
+   */
+  private getTrackAlbum(item: MusicItem): { name?: string; id?: string } {
     const linkedAlbum = (item.flex_columns ?? [])
       .slice(1)
       .find((column) => this.isAlbumColumn(column));
-    if (!linkedAlbum) return undefined;
-    return this.getColumnText(linkedAlbum)?.trim() || undefined;
+    if (!linkedAlbum) return {};
+
+    const id = linkedAlbum.title?.runs
+      ?.map((run) => this.findBrowseId(run.endpoint) ?? this.findBrowseId(run.navigationEndpoint))
+      .find((browseId) => browseId?.startsWith("MPRE"));
+
+    return { name: this.getColumnText(linkedAlbum)?.trim() || undefined, id: id ?? undefined };
   }
 
   private getTitle(item: MusicItem): string | null {
@@ -989,6 +1003,7 @@ export class YouTubeMusicDataSource extends DataSource {
     const title = this.getTitle(item);
     if (!id || !title) return null;
     const viewCountText = this.getViewCountText(item);
+    const album = this.getTrackAlbum(item);
 
     return {
       id,
@@ -996,7 +1011,8 @@ export class YouTubeMusicDataSource extends DataSource {
       title,
       artist: this.getArtistName(item),
       artists: this.getArtists(item),
-      album: this.getTrackAlbumName(item),
+      album: album.name,
+      albumId: album.id,
       artworkUrl: this.getArtwork(item) ?? getVideoArtworkFallback(id),
       playlistItemId: this.getPlaylistItemId(item),
       viewCount: this.parseViewCount(viewCountText),

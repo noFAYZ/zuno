@@ -52,12 +52,15 @@ interface QueueEntry {
   section: QueueSection;
 }
 
-function formatRemaining(tracks: QueueEntry[]): string | null {
+/** Sums across the sections in place; spreading them into one array copied every upcoming track. */
+function formatRemaining(...sections: QueueEntry[][]): string | null {
   let seconds = 0;
-  for (const { track } of tracks) {
-    // One missing duration makes the total a lie, so don't show one at all.
-    if (!track.durationSec) return null;
-    seconds += track.durationSec;
+  for (const section of sections) {
+    for (const { track } of section) {
+      // One missing duration makes the total a lie, so don't show one at all.
+      if (!track.durationSec) return null;
+      seconds += track.durationSec;
+    }
   }
   if (seconds === 0) return null;
 
@@ -307,8 +310,15 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   }, [manualQueueLength, queue, queueIndex]);
 
   const upcomingCount = manual.length + automatic.length;
+  /*
+   * Summed over the two lists in place rather than by spreading them into a third.
+   *
+   * `manual` and `automatic` are rebuilt whenever the queue array identity changes — which is
+   * on every session export, not only when the queue actually changes — so this ran a full
+   * copy plus a pass over every upcoming track far more often than the contents moved.
+   */
   const remaining = useMemo(
-    () => formatRemaining([...manual, ...automatic]),
+    () => formatRemaining(manual, automatic),
     [automatic, manual],
   );
 

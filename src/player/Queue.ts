@@ -6,7 +6,6 @@ export class Queue {
   private originalUpcoming: Track[] | null = null;
   private index = -1;
   private manualQueueLength = 0;
-  private sourceTracks: Track[] = [];
 
   get current(): Track | null {
     return this.index >= 0 && this.index < this.items.length
@@ -35,7 +34,6 @@ export class Queue {
       Math.max(manualQueueLength, 0),
       Math.max(0, tracks.length - this.index - 1),
     );
-    this.sourceTracks = [];
   }
 
   add(track: Track): void {
@@ -85,14 +83,6 @@ export class Queue {
   get remainingAutomatic(): number {
     const automaticStart = this.index + 1 + this.manualQueueLength;
     return Math.max(0, this.items.length - automaticStart);
-  }
-
-  getSourceTracks(): Track[] {
-    return this.sourceTracks;
-  }
-
-  setSourceTracks(tracks: Track[]): void {
-    this.sourceTracks = tracks;
   }
 
   appendAutomaticTracks(tracks: Track[]): void {
