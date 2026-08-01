@@ -139,6 +139,23 @@ export async function hydrateMiniPlayerSettings() {
  */
 let miniPlayerCreation: Promise<WebviewWindow | null> | null = null;
 
+/*
+ * Creation and destruction are serialized against each other.
+ *
+ * Alt-tabbing fires blur and focus within a few milliseconds, and focus now *destroys* the
+ * window rather than hiding it. Interleaved, the pair can either leave an orphan on screen or
+ * tear down the window that was just asked for. One chain means the last call wins.
+ */
+let miniPlayerOps: Promise<unknown> = Promise.resolve();
+
+function queueMiniPlayerOp<T>(op: () => Promise<T>): Promise<T> {
+  const next = miniPlayerOps.then(op, op);
+  // A rejection belongs to its own caller; the chain has to survive it or every later
+  // show and hide is dropped with it.
+  miniPlayerOps = next.catch(() => undefined);
+  return next;
+}
+
 async function createMiniPlayerWindow(): Promise<WebviewWindow | null> {
   const existing = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
   if (existing) return existing;
@@ -172,7 +189,7 @@ async function createMiniPlayerWindow(): Promise<WebviewWindow | null> {
 export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
   if (miniPlayerCreation) return miniPlayerCreation;
 
-  const creation = createMiniPlayerWindow();
+  const creation = queueMiniPlayerOp(createMiniPlayerWindow);
   miniPlayerCreation = creation;
   void creation.catch(() => null).finally(() => {
     if (miniPlayerCreation === creation) miniPlayerCreation = null;
@@ -181,14 +198,16 @@ export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
 }
 
 /** Frees the window's process. `hide()` keeps it resident; only destroying returns the memory. */
-export async function destroyMiniPlayerWindow() {
-  const miniWin = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
-  if (!miniWin) return;
-  try {
-    await miniWin.destroy();
-  } catch {
-    // Already gone, or closing concurrently; either way there is nothing left to free.
-  }
+export function destroyMiniPlayerWindow(): Promise<void> {
+  return queueMiniPlayerOp(async () => {
+    const miniWin = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
+    if (!miniWin) return;
+    try {
+      await miniWin.destroy();
+    } catch {
+      // Already gone, or closing concurrently; either way there is nothing left to free.
+    }
+  });
 }
 
 export async function resetMiniPlayerPosition() {

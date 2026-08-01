@@ -492,13 +492,23 @@ export default function MiniPlayer() {
 
   const handleRestore = async () => {
     await emit("mini-player:restore-main");
-    await win.hide();
+
+    /*
+     * Best-effort, and deliberately not awaited into the restore below.
+     *
+     * The main window answers that event by *destroying* this window rather than hiding it,
+     * so a hide issued here can land after the window is already gone and reject. Awaited,
+     * that rejection aborts the rest of this function and leaves the main window in the
+     * background — the click appears to do nothing. Kept only for the instant visual
+     * feedback while the destroy makes its way across.
+     */
+    void win.hide().catch(() => {});
+
     const mainWin = await WebviewWindow.getByLabel("main");
     if (mainWin) {
       await mainWin.show();
       await mainWin.unminimize();
       await mainWin.setFocus();
-      await win.hide();
     }
   };
 
@@ -607,8 +617,13 @@ export default function MiniPlayer() {
     void handleRestore();
   };
 
+  /*
+   * Destroys rather than hides. Dismissing the pill is a request for it to stop being there,
+   * and a hidden webview keeps its entire renderer process — the thing this window is created
+   * on demand to avoid. The main window creates a fresh one next time it is backgrounded.
+   */
   const handleClose = async () => {
-    await win.hide();
+    await win.destroy();
   };
 
   const stopManualWindowDrag = async () => {

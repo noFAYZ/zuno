@@ -132,6 +132,12 @@ import {
   type SidebarMode,
 } from "../settings/sidebarMode";
 import {
+  AUDIO_ENGINE_MODES,
+  setAudioEngineMode,
+  useAudioEngineMode,
+  type AudioEngineMode,
+} from "../settings/audioEngine";
+import {
   captureKeyboardShortcut,
   formatKeyboardShortcut,
   KEYBOARD_SHORTCUT_ACTIONS,
@@ -425,6 +431,7 @@ export function SettingsPage({
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
+  const audioEngineMode = useAudioEngineMode();
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
   const lyricsTranslationLang = useLyricsTranslationLang();
@@ -1710,6 +1717,48 @@ export function SettingsPage({
 
       {activeTab === "playback" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Playback settings">
+          <section className={SETTINGS_CARD} aria-labelledby="playback-engine-title">
+            <SettingsCardHeader
+              title="Audio engine"
+              titleId="playback-engine-title"
+              icon={<PlayIcon size={18} aria-hidden="true" />}
+              description="What actually plays the sound."
+            />
+
+            <SettingRow
+              title="Playback method"
+              description={
+                audioEngineMode === "native"
+                  ? "Zuno resolves and downloads each track itself, then plays it locally. No hidden YouTube frame, so the app uses roughly 90 MB less. Tracks take a moment longer to start, and gapless and crossfade below do not apply."
+                  : "A hidden YouTube player streams each track. Slightly heavier, but it starts faster and is the only engine that can do gapless and crossfade. Come back here if native playback fails to start a song."
+              }
+            >
+              {() => (
+                <Select
+                  className="w-52"
+                  value={audioEngineMode}
+                  onValueChange={(value) => setAudioEngineMode(value as AudioEngineMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {AUDIO_ENGINE_MODES.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+            <p className="px-1 text-xs text-muted-foreground">
+              Takes effect on the next track — whatever is playing now finishes on the engine
+              that started it, and only frees the hidden YouTube frame once it does.
+            </p>
+          </section>
+
           <section className={SETTINGS_CARD} aria-labelledby="playback-settings-title">
             <SettingsCardHeader
               title="Transitions"

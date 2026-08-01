@@ -1,6 +1,6 @@
 # Backend — Rust / Tauri
 
-`src-tauri/` — Tauri 2, edition 2021, crate `just_another_music_client_lib`.
+`src-tauri/` — Tauri 2, edition 2021, crate `zuno`, lib target `zuno_lib`.
 See [architecture.md](./architecture.md) for the system view.
 
 ---
@@ -9,20 +9,22 @@ See [architecture.md](./architecture.md) for the system view.
 
 | File | Lines | Responsibility |
 |---|---|---|
-| `main.rs` | 25 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
-| `lib.rs` | ~2380 | Everything else: commands, cache, settings, logging, session storage, HTTP proxy, audio fetch, local media server, window events, builder wiring |
-| `discord_rpc.rs` | 190 | Discord IPC client lifecycle and activity payloads |
+| `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
+| `lib.rs` | ~3780 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
+| `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
 | `macos_media.rs` | 189 | `MPNowPlayingInfoCenter` (macOS only) |
 
 ### Dependencies of note
 
-`tauri` (feature `macos-private-api`), `tauri-plugin-{autostart,opener,localhost,updater,process,dialog}`,
-`reqwest` (rustls-tls, gzip/brotli/deflate), `keyring` 3.6 with native backends, `discord-rich-presence`,
-`md5`, `base64`, `url`, `portpicker`.
-macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows adds the `windows` crate
-(Media, Media_Playback, Storage_Streams, Win32 Shell/Gdi/Com/UI).
+`tauri` (features `macos-private-api`, `tray-icon`, `image-png`),
+`tauri-plugin-{autostart,opener,localhost,updater,process,dialog}`,
+`reqwest` (rustls-tls, gzip/brotli/deflate, **stream**), `futures-util` (parallel range downloads),
+`keyring` 3.6 with native backends, `lofty` 0.24 (audio tag read/write), `notify` 8.2 (folder
+watching), `discord-rich-presence`, `md5`, `base64`, `url`, `portpicker`.
+macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows adds the `windows`
+crate (Media, Media_Playback, Storage_Streams, Win32 Shell/Gdi/Com/UI/Controls).
 
 ---
 
@@ -31,6 +33,7 @@ macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows add
 ```rust
 manage(CacheLock)            // Mutex<()> serializing all cache file ops
 manage(AppSettingsLock)      // Mutex<()> serializing settings file ops
+manage(YoutubeCookieJar)     // Mutex<CookieJarState> — the live session cookies
 manage(DiscordRpcManager)
 plugin(autostart, updater, process, dialog, opener)
 
@@ -41,10 +44,13 @@ plugin(autostart, updater, process, dialog, opener)
 
 #[cfg(windows)] manage(WindowsMediaSession)
 #[cfg(macos)]   manage(MacosMediaSession)
+manage(LocalAudioWatcher)
 
 #[cfg(linux)] force main window decorations = true   // mutated on the config before build
 
-setup      → initialize_app_log()
+setup      → migrate_legacy_app_data()   // before the log opens, so a first run after the
+           → initialize_app_log()        //   rename logs into the restored directory
+           → build_tray()                // always built; the setting only changes behaviour
 on_window_event → close / focus handling
 invoke_handler(...)
 ```
@@ -52,20 +58,29 @@ invoke_handler(...)
 Serving the frontend over `http://localhost` in release builds is deliberate: the YouTube IFrame
 player API will not initialize under the `tauri://` custom protocol origin.
 
+`migrate_legacy_app_data` copies app data from the pre-rename
+`com.justanothermusicclient.desktop` identifier into `com.zuno.desktop` on first run.
+
 ### Window events
 
 | Event | Behaviour |
 |---|---|
-| `CloseRequested` on `main` | `api.prevent_close()` then `app.exit(0)` — quits the whole app rather than orphaning the mini-player window |
-| `Focused(false)` on `main` | Spawns a thread, waits 100 ms, re-checks that neither main nor mini is focused, then emits `main-window-backgrounded` (debounce against focus flicker during window drags) |
+| `CloseRequested` on `main` | `api.prevent_close()` then `close_or_hide_main_window()` — hides to the tray if `minimize-to-tray` is set, otherwise `app.exit(0)`. The titlebar button routes through the same function via `quit_app`, so the two can't disagree |
+| `Focused(false)` on `main` | Spawns a thread, waits 100 ms, re-checks that neither main nor mini is focused, then emits `main-window-minimized` (if the window is minimized) or `main-window-backgrounded` — the debounce guards against focus flicker during window drags |
 | `Focused(true)` on `main` | Emits `window-focused` |
+
+### Tray
+
+`build_tray()` installs a `main-tray` icon with a two-item menu (**Show Zuno** / **Quit Zuno**).
+Left click restores the window; the menu is right-click only. **Quit Zuno** is the one path that
+always exits regardless of the minimize-to-tray setting.
 
 ---
 
 ## 3. Command reference
 
-Every command is invoked from TypeScript via `@tauri-apps/api/core`'s `invoke` and must also be
-listed in `src-tauri/capabilities/default.json`.
+Every command is invoked from TypeScript via `@tauri-apps/api/core`'s `invoke` and registered in
+`tauri::generate_handler!`.
 
 ### App settings — `<app_data_dir>/settings-v1.json`
 
@@ -77,7 +92,7 @@ listed in `src-tauri/capabilities/default.json`.
 | `app_settings_clear` | `()` | Used by "delete all app data" |
 
 Simple flat `HashMap<String, Value>`. Whole-file rewrite per key — fine at this scale, and the mutex
-prevents interleaved writes.
+prevents interleaved writes. Rust reads one key of its own out of this file: `minimize-to-tray`.
 
 ### Data cache — `<app_cache_dir>/data-cache-v1/`
 
@@ -107,14 +122,19 @@ Implementation details:
 directory. A local `eprintln!` macro shadows the std one so *all* Rust logging is routed through
 `sanitize_log_message` and appended to the same file.
 
+`sanitize_log_url` is the interesting half: it keeps the parameters that explain a googlevideo 403
+(`expire`, `itag`, `mime`, `clen`, `c`, `cver`) and replaces the rest — `sig`, `lsig`, `pot`, `n`,
+`ip` — with a `[9ch]`-style length marker, so a truncated signature is distinguishable from a
+missing one without leaking either. Unparseable input becomes `[redacted-url]`.
+
 ### YouTube session
 
 | Command | Signature | Notes |
 |---|---|---|
 | `sign_in_youtube_music` | `() -> String` | Opens the login window, polls for cookies, returns the Cookie header |
-| `load_youtube_music_cookie` | `() -> Option<String>` | |
+| `refresh_youtube_music_cookie` | `() -> Option<String>` | Silent re-mint in a hidden window, up to `YOUTUBE_SILENT_REFRESH_POLLS` (25) polls |
+| `load_youtube_music_cookie` | `() -> Option<String>` | Also seeds the in-memory cookie jar |
 | `delete_youtube_music_cookie` | `()` | Also clears the login window's browsing data if present |
-| `save_youtube_credentials` / `load_youtube_credentials` / `delete_youtube_credentials` | | Legacy OAuth-JSON slot, kept for migration/detection |
 
 **Sign-in flow** (`sign_in_youtube_music`): create window `youtube-music-login` at `about:blank` →
 `clear_all_browsing_data()` → navigate to the Google sign-in URL → poll once a second for up to 300
@@ -123,6 +143,25 @@ polls. Success requires *both* an auth cookie (`SAPISID` / `__Secure-1PAPISID` /
 persisted, and the window closes. If the user closes the window, the command errors with "cancelled".
 macOS reads cookies via `window.cookies()` filtered by `cookie_domain_matches` (unit-tested); other
 platforms use `cookies_for_url`. macOS also sets a Safari user agent so Google serves the desktop flow.
+
+**Cookie jar.** Google rotates session cookies continuously, and a session that only ever stores what
+sign-in returned goes stale overnight. `proxy_http_request` feeds every `Set-Cookie` from a YouTube
+host through `apply_set_cookie`, which merges it into `YoutubeCookieJar` in original order:
+
+- a rotated value replaces the stale one and reports a change,
+- the same value again reports *no* change, so it triggers no keyring write,
+- an expiry/`max-age=0` tombstone drops the cookie.
+
+Credential rotations (`__Secure-*PSIDTS`, `SAPISID`, …) are persisted immediately.
+`is_slow_persist_cookie` marks only the noisy `SIDCC` family as allowed to wait for the
+`YOUTUBE_COOKIE_PERSIST_INTERVAL` (5 min) — getting that list backwards is what once made a session
+look lost after a `PSIDTS` rotated at 23:58 and never got written. `is_youtube_cookie_host` gates
+the whole thing: a suffix match alone would hand the session to `notyoutube.com`.
+
+`cookie_account_identity()` reduces a header to its `SAPISID` (falling back to
+`__Secure-1PAPISID` / `__Secure-3PAPISID`), so a re-signed-in session is recognised as the same
+account and keeps its cache, while a genuinely different account drops it. An empty value returns
+`None` rather than `""`, so two unknowns don't compare equal.
 
 **Storage** (service name `com.ytmusicdock.app`, kept from before the rename):
 
@@ -139,29 +178,68 @@ Every youtubei.js request goes through here (`src/datasource/youtube/tauriFetch.
 Why: the WebView can't set `Cookie`/`Origin` headers or bypass CORS, and Innertube needs both.
 
 - Fixed Chrome 135 user agent.
+- Merges response `Set-Cookie` headers into the cookie jar (see above).
 - `signed_googlevideo_local_address()` — signed googlevideo URLs embed an `ip=` parameter; the client binds `local_address` to the matching IP family (`0.0.0.0` or `::`) so the signature stays valid on dual-stack machines.
 - Cookie and Authorization headers are redacted in logs.
 - `/browse` responses under 400 get their renderer types counted into the debug log — a diagnostic for when YouTube changes response shapes.
 
-### Audio
+### Audio — streaming and fallback
 
 | Command | Signature | Notes |
 |---|---|---|
 | `fetch_audio_bytes` | `(url, trackId) -> Vec<u8>` | Downloads with YouTube-ish headers (Range, Origin, Referer, Sec-Fetch-*), same signed-IP handling |
 | `fetch_audio_source` | `(url, trackId, mimeType) -> { url, mimeType, byteLength }` | Downloads, validates the MP4 `ftyp` box at offset 4, stores the bytes in the in-process media server, returns a `http://127.0.0.1:<port>/audio/<key>` URL |
-| `fetch_youtube_music_audio` | `(videoId) -> { bodyBase64, mimeType }` | Direct InnerTube player API using iOS/TV contexts that return undeciphered URLs |
-| `local_audio_scan` | `(paths: Vec<String>) -> Vec<LocalAudioFile>` | Recursive directory walk; extensions mp3, m4a, mp4, aac, flac, wav, ogg, oga, opus, webm. Sorted case-insensitively and deduped. Album name is inferred from the parent folder |
-| `local_audio_read` | `(path) -> { bodyBase64, mimeType }` | Re-validates the path is a file with an allowed extension before reading |
+| `fetch_youtube_music_audio` | `(videoId) -> { bodyBase64, mimeType }` | Direct InnerTube player API using web-remix / web / iOS / Android / TV contexts that return undeciphered URLs |
 
 **Media server**: a lazily started `TcpListener` on `127.0.0.1:0` with a thread per connection,
-backed by `HashMap<key, MediaItem>`. It exists so the WebView can stream MP4 audio from a plain
-`http://` origin — signed googlevideo URLs 403 when replayed from the WebView, and base64 blobs of
-a whole track are wasteful. Entries are keyed `"<trackId>-<epoch_ms>"` and never evicted (in-memory,
-process lifetime).
+backed by `HashMap<key, MediaItem>`, and `parse_media_range` implementing HTTP Range so the WebView
+can seek. It exists because signed googlevideo URLs 403 when replayed from the WebView, and base64
+blobs of a whole track are wasteful. Entries are in-memory for the process lifetime.
 
-**Note:** with `AudioEngine.shouldUseNativeAudio()` hardcoded to `false`, `fetch_audio_bytes`,
-`fetch_audio_source`, and `fetch_youtube_music_audio` are currently only reachable through the
-local-file path or manual re-enablement.
+**Note:** with `AudioEngine.shouldUseNativeAudio()` hardcoded to `false`, these three are on the
+fallback path only — ordinary streaming goes through the IFrame decks. Downloads use
+`offline_audio_save` below.
+
+### Audio — offline downloads
+
+| Command | Signature | Notes |
+|---|---|---|
+| `offline_audio_save` | `(url, trackId, cookie?) -> u64` | Downloads the signed URL into `<app_data_dir>/offline-audio-v1/<trackId>.bin`, returns byte length |
+| `offline_audio_source` | `(trackId, mimeType) -> { url, mimeType, byteLength }` | Loads the stored bytes into the media server under key `offline-<trackId>` and returns its URL |
+| `offline_audio_has` | `(trackId) -> bool` | |
+| `offline_audio_remove` | `(trackId)` | |
+| `offline_audio_list` | `() -> Vec<{ trackId, byteLength }>` | The source of truth the frontend manifest reconciles against |
+| `offline_audio_stats` | `() -> { entryCount, usedBytes }` | |
+| `offline_audio_prune` | `(maxBytes) -> OfflineStats` | Deletes oldest-first until under the ceiling |
+
+- **Ranged and parallel.** `OFFLINE_CHUNK_BYTES` is 4 MiB and `OFFLINE_CHUNK_CONCURRENCY` is 6.
+  googlevideo throttles a single sequential stream hard, which is why downloading a track used to
+  take far longer than streaming the same track takes to buffer; several ranges in flight side-step
+  it. `signed_content_length()` reads `clen` from the URL to plan the ranges, and
+  `audio_url_with_range()` appends `range=start-end` without re-encoding the query (re-encoding `==`
+  breaks the signature).
+- **Progress.** `emit_offline_progress` emits `offline-download-progress`
+  `{ trackId, receivedBytes, totalBytes, percent }`.
+- **Path safety.** `offline_entry_path` rejects ids that are empty, contain `..`, or contain
+  `/ \ : \0` — track ids come from YouTube and are filename-safe, but a hostile one must not escape
+  the directory.
+
+### Local files
+
+| Command | Signature | Notes |
+|---|---|---|
+| `local_audio_scan` | `(paths: Vec<String>) -> Vec<LocalAudioFile>` | Recursive directory walk; extensions mp3, m4a, mp4, aac, flac, wav, ogg, oga, opus, webm. Sorted case-insensitively and deduped. Album name is inferred from the parent folder |
+| `local_audio_read` | `(path) -> { bodyBase64, mimeType }` | Re-validates the path is a file with an allowed extension before reading |
+| `local_audio_read_tags` | `(path) -> LocalAudioTags` | `lofty` |
+| `local_audio_write_tags` | `(path, tags)` | `lofty` |
+| `local_audio_watch` | `(paths: Vec<String>)` | Replaces the active `notify` watcher wholesale; emits `local-audio-changed` at most once a second |
+| `local_audio_unwatch` | `()` | Drops the watcher, which unregisters every path |
+| `read_text_file` | `(path) -> String` | Playlist import. Capped at 16 MiB — the picker allows any file, and reading a multi-gigabyte one into a `String` to discover it isn't a playlist would take the app down |
+| `write_text_file` | `(path, contents)` | Playlist export; creates the parent directory |
+
+The watcher is deliberately coarse: one debounced "something changed" event, no diff. A precise
+change feed would have to model renames, temp files and write-then-replace editors, all of which
+produce the same user-visible outcome — a rescan.
 
 ### Integrations
 
@@ -173,9 +251,9 @@ local-file path or manual re-enablement.
 | `lastfm_complete_auth` | | `auth.getSession` → stores the session key in the keyring |
 | `lastfm_get_session` / `lastfm_disconnect` | | |
 | `lastfm_update_now_playing` / `lastfm_scrobble` | | MD5 `api_sig` over sorted params + shared secret |
-| `update_windows_media_session` | `windows_media.rs` | Windows only |
+| `update_windows_media_session` | `windows_media.rs` | Windows only (`#[cfg]` inside `generate_handler!`) |
 | `update_macos_media_session` | `macos_media.rs` | macOS only |
-| `quit_app` | `lib.rs` | `app.exit(0)` |
+| `quit_app` | `lib.rs` | Routes to `close_or_hide_main_window` |
 | `greet` | `lib.rs` | Tauri scaffolding leftover; unused |
 
 **Windows media** (`windows_media.rs`): a `MediaPlayer` + `SystemMediaTransportControls` pair driving
@@ -198,19 +276,28 @@ authorizes writes. Session key lives in the keyring under `lastfm-session-v1`.
 
 `src-tauri/capabilities/default.json` scopes both windows (`main`, `mini-player`):
 
-- Core window permissions: drag, minimize/maximize/unmaximize, fullscreen, decorations, show/hide/focus, position/size get+set, cursor position and icon, ignore-cursor-events (the mini player's click-through behaviour).
+- Core window permissions: drag, minimize/maximize/unmaximize, fullscreen, decorations, show/hide/focus/destroy, position/size get+set, current monitor, cursor position and icon, ignore-cursor-events (the mini player's click-through behaviour), and webview-window creation.
 - Plugin permissions: `autostart:{enable,disable,is-enabled}`, `opener:default`, `updater:default`, `process:allow-restart`, `dialog:{allow-open,allow-message}`.
-- An explicit `command.allow` list naming every custom command.
 - `remote.urls` permits `https://**` and localhost/127.0.0.1.
+
+**The `command.allow` and `allowlist.shell` blocks in that file are Tauri 1 syntax and gate nothing
+in Tauri 2** — capabilities scope *core and plugin* permissions; your own `#[tauri::command]`
+functions are callable from the app's own windows once they're in `generate_handler!`. The proof is
+that the list is missing every command added since it was written (all `offline_audio_*`,
+`read_text_file`, `write_text_file`, `local_audio_*_tags`, `local_audio_watch`/`unwatch`,
+`refresh_youtube_music_cookie`, `open_current_log`) and all of them work. Either delete the two
+blocks or stop treating them as a checklist; do not add to them expecting an effect.
 
 `app.security.csp` is `null` — no CSP. Required because the YouTube IFrame API script is loaded from
 `youtube.com` at runtime. If native playback ever replaces the IFrame path, this should be tightened.
 
 Defense in depth that *is* in place:
 
-- Two-stage log redaction (TS `sanitizeForLog` → Rust `sanitize_log_message`).
+- Two-stage log redaction (TS `sanitizeForLog` → Rust `sanitize_log_message` / `sanitize_log_url`).
+- Cookie jar writes are gated on `is_youtube_cookie_host`, an exact-or-parent-domain check.
 - Discord artwork restricted to `i.ytimg.com` / `lh3.googleusercontent.com` / `yt3.ggpht.com`, presence links to YouTube hosts, HTTPS only.
-- `local_audio_read` re-validates path and extension rather than trusting the frontend.
+- `local_audio_read` / `local_audio_write_tags` re-validate path and extension rather than trusting the frontend; `read_text_file` is size-capped.
+- `offline_entry_path` rejects traversal in track ids.
 - Secrets never touch localStorage — keyring or an encrypted file only.
 
 ---
@@ -230,9 +317,26 @@ Defense in depth that *is* in place:
 fallback if the Releases redirect is unavailable. macOS skips the plugin entirely
 (`internal/updateChecker.ts` uses the GitHub Releases API and only links to the download page).
 
+Linux packaging lives outside `src-tauri/`: `packaging/aur/` (PKGBUILD + `.SRCINFO`),
+`packaging/flatpak/` (manifest, desktop entry, metainfo), and `manifests/` for winget — each with a
+release workflow under `.github/workflows/`.
+
 ---
 
 ## 6. Tests
 
-`lib.rs` carries one `#[cfg(test)]` module covering `cookie_domain_matches` — exact, parent-domain,
-and rejection cases. That's the whole automated test suite; there is no frontend test harness.
+`cargo test` runs the `#[cfg(test)]` module at the bottom of `lib.rs`:
+
+| Test | Covers |
+|---|---|
+| `set_cookie_merges_rotations_into_the_stored_session` | `apply_set_cookie` — replace, add, no-op, tombstone, order preservation |
+| `only_the_noisy_cookies_may_be_persisted_late` | `is_slow_persist_cookie` — `SIDCC` may wait, credentials may not |
+| `account_identity_survives_a_renewal_and_changes_with_the_account` | `cookie_account_identity` fallbacks and the empty-value `None` |
+| `only_youtube_hosts_touch_the_cookie_jar` | `is_youtube_cookie_host` rejects `notyoutube.com` and googlevideo |
+| `audio_url_with_range_appends_without_disturbing_the_signature` | query present/absent, percent-encoding preserved |
+| `signed_content_length_reads_clen` | `clen` parsing |
+| `sanitize_log_url_*` | secrets withheld by value, diagnostics kept, unparseable input |
+| `cookie_domain_matches_*` | exact, parent-domain, and rejection cases |
+
+The frontend's equivalent is `npm run check` (`scripts/run-checks.mjs` over `src/**/*.check.ts`).
+There is no component/DOM test harness on either side.

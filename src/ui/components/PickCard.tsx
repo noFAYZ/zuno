@@ -6,6 +6,12 @@ import { TrackArtwork } from "./TrackArtwork";
 /** Movement past this many px means the gesture was a carousel drag, not a tap. */
 const TAP_SLOP_PX = 5;
 
+/**
+ * Resting card width — `PICKS_ITEM_SIZE` (250) × `PICKS_ASPECT` (3/4) in HomePage, rounded up
+ * for the centre card's scale-up. Only the size bucket it lands in matters.
+ */
+const CARD_WIDTH_PX = 200;
+
 interface PickCardProps {
   artworkUrl?: string;
   title: string;
@@ -121,6 +127,11 @@ export function PickCard({
           className="size-full transition-transform duration-200 ease-out group-hover/pick:scale-[1.04]"
           artworkUrl={artworkUrl}
           iconSize={44}
+          /*
+           * The carousel's own hover/centre scaling peaks a little above 1, so the slot is
+           * requested slightly larger than its resting width rather than at exactly it.
+           */
+          size={CARD_WIDTH_PX}
           variant="album"
         />
 

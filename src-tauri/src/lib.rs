@@ -9,7 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1929,6 +1929,9 @@ struct ProxyHttpResponse {
 struct MediaItem {
     bytes: Arc<Vec<u8>>,
     mime_type: String,
+    /// Insertion order, for evicting the coldest entry. A counter rather than a timestamp:
+    /// two inserts inside the same millisecond still have to be orderable.
+    sequence: u64,
 }
 
 struct MediaServer {
@@ -1945,6 +1948,61 @@ struct AudioSourcePayload {
 }
 
 static MEDIA_SERVER: OnceLock<MediaServer> = OnceLock::new();
+static MEDIA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/**
+ * Audio bodies held in memory at once.
+ *
+ * Two is the real working set — the track playing, and the one preloaded behind it — with a
+ * third as slack for a fast skip that starts a fourth before the first has been let go. Each
+ * entry is a whole song, so a slot costs megabytes: this is a cap, not a cache.
+ */
+const MEDIA_SERVER_MAX_ITEMS: usize = 3;
+
+/**
+ * Publishes a body under `key`, evicting the coldest entries to stay under the cap.
+ *
+ * The eviction is the point. This map was insert-only, so with native audio on, every track
+ * ever played stayed resident for the life of the process — a few megabytes per song, never
+ * returned.
+ *
+ * Replacing an existing key is safe mid-playback: `handle_media_request` clones the `Arc`
+ * before it writes, so a request already in flight finishes against the bytes it started with.
+ */
+fn store_media_item(
+    items: &Arc<Mutex<HashMap<String, MediaItem>>>,
+    key: String,
+    bytes: Vec<u8>,
+    mime_type: String,
+) -> Result<(), CommandError> {
+    let mut items = items.lock().map_err(|_| CommandError {
+        message: "media server cache lock poisoned".into(),
+    })?;
+
+    items.insert(
+        key,
+        MediaItem {
+            bytes: Arc::new(bytes),
+            mime_type,
+            sequence: MEDIA_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        },
+    );
+
+    while items.len() > MEDIA_SERVER_MAX_ITEMS {
+        let coldest = items
+            .iter()
+            .min_by_key(|(_, item)| item.sequence)
+            .map(|(key, _)| key.clone());
+        match coldest {
+            Some(key) => {
+                items.remove(&key);
+            }
+            None => break,
+        }
+    }
+
+    Ok(())
+}
 
 fn collect_json_renderer_counts(value: &serde_json::Value, counts: &mut HashMap<String, usize>) {
     match value {
@@ -2056,8 +2114,18 @@ fn handle_media_request(
     } else {
         String::new()
     };
+    /*
+     * `no-store` is load-bearing, not hygiene.
+     *
+     * Without it the webview keeps its own copy of every audio body it fetches — whole songs,
+     * several megabytes each, in the renderer process. That is memory this process is already
+     * holding, retained a second time by the one place that cannot be asked to give it back.
+     *
+     * The cost is that seeking backwards re-requests a range instead of reading the webview's
+     * copy. Over loopback against a `Vec<u8>` already in memory, that is a memcpy.
+     */
     let headers = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {}\r\nAccept-Ranges: bytes\r\n{}Content-Length: {body_len}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {}\r\nAccept-Ranges: bytes\r\nCache-Control: no-store\r\n{}Content-Length: {body_len}\r\nConnection: close\r\n\r\n",
         item.mime_type,
         content_range,
     );
@@ -2517,18 +2585,7 @@ fn offline_audio_source(
 
     let server = media_server()?;
     let key = format!("offline-{track_id}");
-    {
-        let mut items = server.items.lock().map_err(|_| CommandError {
-            message: "media server cache lock poisoned".into(),
-        })?;
-        items.insert(
-            key.clone(),
-            MediaItem {
-                bytes: Arc::new(bytes),
-                mime_type: mime_type.clone(),
-            },
-        );
-    }
+    store_media_item(&server.items, key.clone(), bytes, mime_type.clone())?;
 
     Ok(AudioSourcePayload {
         url: format!("{}/audio/{}", server.origin, key),
@@ -2653,27 +2710,16 @@ async fn fetch_audio_source(
     }
 
     let server = media_server()?;
-    let key = format!(
-        "{}-{}",
-        track_id,
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis())
-            .unwrap_or_default()
-    );
+    /*
+     * Keyed by track alone. This used to carry a millisecond timestamp, which minted a fresh
+     * URL for every play — so a replay stored a second copy of the same song here, and the
+     * webview accumulated an entry per play under a URL it would never request again.
+     *
+     * Prefixed to keep this namespace clear of `offline_audio_source`'s.
+     */
+    let key = format!("stream-{track_id}");
     let byte_length = bytes.len();
-    {
-        let mut items = server.items.lock().map_err(|_| CommandError {
-            message: "media server cache lock poisoned".into(),
-        })?;
-        items.insert(
-            key.clone(),
-            MediaItem {
-                bytes: Arc::new(bytes),
-                mime_type: mime_type.clone(),
-            },
-        );
-    }
+    store_media_item(&server.items, key.clone(), bytes, mime_type.clone())?;
 
     Ok(AudioSourcePayload {
         url: format!("{}/audio/{}", server.origin, key),
@@ -3608,8 +3654,52 @@ mod tests {
     use super::{
         apply_set_cookie, audio_url_with_range, cookie_account_identity, cookie_domain_matches,
         is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
-        serialize_cookie_pairs, signed_content_length,
+        serialize_cookie_pairs, signed_content_length, store_media_item, MediaItem,
+        MEDIA_SERVER_MAX_ITEMS,
     };
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// The guard on the leak: this map was insert-only, so every song ever played stayed in
+    /// memory for the life of the process.
+    #[test]
+    fn media_items_stay_capped_and_evict_the_coldest_first() {
+        let items: Arc<Mutex<HashMap<String, MediaItem>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        for index in 0..MEDIA_SERVER_MAX_ITEMS + 3 {
+            store_media_item(
+                &items,
+                format!("stream-track{index}"),
+                vec![0_u8; 8],
+                "audio/mp4".into(),
+            )
+            .map_err(|error| error.message)
+            .expect("store succeeds");
+        }
+
+        let stored = items.lock().expect("lock");
+        assert_eq!(stored.len(), MEDIA_SERVER_MAX_ITEMS, "cap is not enforced");
+        // The newest survive; the first inserts are the ones that had to go.
+        assert!(stored.contains_key(&format!("stream-track{}", MEDIA_SERVER_MAX_ITEMS + 2)));
+        assert!(!stored.contains_key("stream-track0"));
+    }
+
+    /// A replay must reuse its slot rather than add a second copy of the same song — the other
+    /// half of the leak, caused by the key carrying a timestamp.
+    #[test]
+    fn restoring_the_same_track_replaces_rather_than_accumulates() {
+        let items: Arc<Mutex<HashMap<String, MediaItem>>> = Arc::new(Mutex::new(HashMap::new()));
+
+        for _ in 0..5 {
+            store_media_item(&items, "stream-same".into(), vec![7_u8; 4], "audio/mp4".into())
+                .map_err(|error| error.message)
+                .expect("store succeeds");
+        }
+
+        let stored = items.lock().expect("lock");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored["stream-same"].bytes.len(), 4);
+    }
 
     /// The whole point of the jar: a rotated value replaces the stale one, a new value joins,
     /// an unchanged value reports no change, and a tombstone drops the cookie.

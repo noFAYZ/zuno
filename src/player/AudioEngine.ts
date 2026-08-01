@@ -1,4 +1,8 @@
 import { logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
+import {
+  AUDIO_ENGINE_MODE_CHANGE_EVENT,
+  usesNativeAudioEngine,
+} from "../ui/settings/audioEngine";
 
 type YouTubePlayerEvent = {
   data: number;
@@ -69,11 +73,42 @@ const audioEngines = new Set<AudioEngine>();
 let playbackClaimId = 0;
 let playbackOwner: AudioEngine | null = null;
 
+/*
+ * Switching to native has to *free* the decks, not merely stop routing to them.
+ *
+ * Changing the setting only changes which branch `loadTrack` takes. Any player already built
+ * keeps its `youtube.com` subframe process alive — the whole ~90 MB the setting exists to give
+ * back — so without this the memory only drops once every tab happens to load another track.
+ *
+ * The engine currently making sound is spared: flipping a setting should not cut off the song
+ * that is playing. It releases at its next track, where `loadTrack`'s native branch does the
+ * same thing.
+ */
+if (typeof window !== "undefined") {
+  window.addEventListener(AUDIO_ENGINE_MODE_CHANGE_EVENT, () => {
+    if (!usesNativeAudioEngine()) return;
+    for (const engine of audioEngines) {
+      if (engine === playbackOwner) continue;
+      engine.releaseIframePlayer();
+    }
+  });
+}
+
+/*
+ * Follows the user's setting, read fresh rather than captured at construction.
+ *
+ * This was hardcoded `false` from v1.2.65: the backend download path answered 403 for remote
+ * streams, so every platform was reverted to the iframe player. What fixed it was PO tokens —
+ * the *download* feature has used this exact resolve-and-fetch path successfully ever since,
+ * which is what makes it safe to offer again. It stays opt-in because a signed URL is resolved
+ * and fetched before the first sample plays, so a track starts a little slower.
+ *
+ * Read per call so switching the setting takes effect on the next track rather than at the next
+ * launch. Mid-track it changes nothing: every branch that matters is `useNativeAudio || audio`,
+ * so a live `<audio>` element keeps being driven as one until it is released.
+ */
 function shouldUseNativeAudio(): boolean {
-  // Native audio playback is disabled for remote YouTube tracks because the
-  // backend download path can fail with 403 errors. v1.2.65 used the iframe
-  // player on every platform, including Linux.
-  return false;
+  return usesNativeAudioEngine();
 }
 
 function isPlayerStateTimeout(error: unknown): boolean {
@@ -128,7 +163,14 @@ function loadYouTubeIframeApi(): Promise<void> {
 }
 
 export class AudioEngine {
-  private readonly useNativeAudio = shouldUseNativeAudio();
+  /*
+   * A getter, not a field captured in the constructor: engines are built once per tab and live
+   * for the whole session, so a captured value would keep the old pipeline until relaunch.
+   */
+  private get useNativeAudio(): boolean {
+    return shouldUseNativeAudio();
+  }
+
   private player: YouTubePlayer | null = null;
   private playerHost: HTMLElement | null = null;
   private playerPromise: Promise<YouTubePlayer> | null = null;
@@ -184,6 +226,12 @@ export class AudioEngine {
       if (!audioData && !sourceUrl) {
         throw new Error("Native playback requires downloaded audio data.");
       }
+      /*
+       * The mirror of `releaseNativeAudio()` on the iframe branch below: whichever pipeline is
+       * not in use gives its resources back. This is also the point where the engine that was
+       * still sounding when the setting changed finally lets go of its subframe.
+       */
+      this.releaseIframePlayer();
       await this.loadNativeAudio(videoId, audioData, mimeType, sourceUrl);
       return;
     }
@@ -370,6 +418,40 @@ export class AudioEngine {
     this.cancelStandbyTeardown();
     this.destroyStandby();
     audioEngines.delete(this);
+  }
+
+  /**
+   * Frees the IFrame decks without disturbing the engine or any `<audio>` it is driving.
+   *
+   * Distinct from `dispose()`, which also stops playback and unregisters the engine. This
+   * leaves a working engine behind that simply builds a new player if the iframe path is asked
+   * for again — which is what switching the audio engine setting back and forth needs.
+   *
+   * The thing being reclaimed is not a DOM element. Each IFrame player holds a `youtube.com`
+   * subframe *process*; merely routing playback elsewhere leaves that ~90 MB resident, which is
+   * exactly the memory the native setting exists to give back.
+   */
+  releaseIframePlayer(): void {
+    if (!this.player && !this.playerPromise && !this.standbyHost) return;
+
+    this.cancelStandbyTeardown();
+    this.destroyStandby();
+
+    // Invalidates any cue or play still awaiting the deck being torn down, so a late resolve
+    // cannot write state for a player that no longer exists.
+    this.loadRequestId += 1;
+    this.player?.destroy();
+    this.playerHost?.remove();
+    this.player = null;
+    this.playerHost = null;
+    this.playerPromise = null;
+    /*
+     * Cleared so a later iframe load actually cues into the fresh player instead of
+     * short-circuiting on `currentVideoId === videoId`. Left alone when an `<audio>` element
+     * owns it — that is the native path's bookkeeping, not the deck's.
+     */
+    if (!this.audio) this.currentVideoId = null;
+    logInternalInfo("AudioEngine.releaseIframePlayer", {});
   }
 
   seekTo(seconds: number): void {

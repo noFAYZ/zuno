@@ -3,12 +3,23 @@ import { TiltCard } from "@/components/motion/tilt-card";
 import { PlayActiveIcon } from "@/ui/icons";
 import { TrackArtwork } from "./TrackArtwork";
 
+/**
+ * Rendered card width in CSS pixels.
+ *
+ * The default covers the `minmax(9rem…9.5rem, 1fr)` grids these sit in. It only has to land in
+ * the right size bucket, not be exact — a column stretched a little wider by `1fr` still
+ * resolves to the same request.
+ */
+const DEFAULT_CARD_SIZE = 176;
+
 interface AlbumCardProps {
   color?: string;
   artworkUrl?: string;
   title?: string;
   subtitle?: string;
   subtitleContent?: ReactNode;
+  /** Override when the card is laid out at a materially different width. */
+  size?: number;
   onClick?: () => void;
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -19,6 +30,7 @@ export function AlbumCard({
   title,
   subtitle,
   subtitleContent,
+  size = DEFAULT_CARD_SIZE,
   onClick,
   onContextMenu,
 }: AlbumCardProps) {
@@ -39,6 +51,7 @@ export function AlbumCard({
             className="size-full object-cover"
             artworkUrl={artworkUrl}
             iconSize={48}
+            size={size}
             variant="album"
           />
           {/* Play affordance fades in on hover rather than sitting permanently on the art. */}
