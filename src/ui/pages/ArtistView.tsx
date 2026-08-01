@@ -344,6 +344,7 @@ export function ArtistView({
                     key={track.id}
                     track={track}
                     index={index}
+                    showAlbum
                     isCurrent={currentTrackId !== null && track.id === currentTrackId}
                     isPlaying={isPlaying && track.id === currentTrackId}
                     suppressArtistId={displayedArtist.id}

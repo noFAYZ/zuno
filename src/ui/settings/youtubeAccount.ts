@@ -81,17 +81,19 @@ export function setAuthenticatedStreaming(enabled: boolean): void {
 }
 
 /**
- * Carries signed-in resolution with it, in both directions.
+ * Sets this flag and nothing else.
  *
- * Reporting plays as yourself while resolving streams as nobody is a half-connected state that
- * nothing benefits from, so the pair moves together from here. The reverse is not true —
- * `setAuthenticatedStreaming` leaves this alone, so signed-in playback without history is
- * reachable and is the setting to use for it.
+ * It used to also drive `setAuthenticatedStreaming`, which made a setter quietly mutate a
+ * second setting — invisible at the call site and wrong for the toolbar shortcut, where the
+ * point is to flip one thing. Callers that *want* both now say so; the Settings toggle does,
+ * the toolbar button does not.
+ *
+ * The two are technically independent: the scrobble pings go out through the authenticated
+ * music client whatever stream resolution is doing.
  */
 export function setYouTubeScrobbling(enabled: boolean): void {
   cachedScrobbling = enabled;
   writeLocalBooleanSetting(SCROBBLING_KEY, enabled, CHANGE_EVENT);
-  setAuthenticatedStreaming(enabled);
 }
 
 export async function hydrateYouTubeAccountSettings(): Promise<void> {

@@ -58,6 +58,14 @@ interface TrackRowProps extends PassthroughButtonProps {
   onToggleSelected?: () => void;
   /** Album pages repeat one cover on every row, so they opt out. */
   showArtwork?: boolean;
+  /**
+   * Shows the album as its own column, between the title and the trailing actions.
+   *
+   * Off by default and off inside an album: every row would repeat the page's own title. It is
+   * for the mixed lists — playlists, search, history — where the album is the fact that tells
+   * two versions of the same song apart.
+   */
+  showAlbum?: boolean;
   /** Hides the artist whose page we are already on. */
   suppressArtistId?: string;
   /** Right-aligned extras — play counts, durations, remove buttons. */
@@ -356,6 +364,7 @@ export const TrackRow = memo(function TrackRow({
   isSelectionActive = false,
   onToggleSelected,
   showArtwork = true,
+  showAlbum = false,
   suppressArtistId,
   trailing,
   className,
@@ -369,6 +378,8 @@ export const TrackRow = memo(function TrackRow({
    * change, but always reach the newest closure, so a row that skipped a render still acts on
    * current state when you click it.
    */
+  // Stable across renders (the provider memoizes it), so reading it here costs the memo nothing.
+  const { openAlbumForTrack } = useTrackContextMenu();
   const handlersRef = useRef({
     onSelect,
     onContextMenu,
@@ -532,6 +543,45 @@ export const TrackRow = memo(function TrackRow({
           suppressArtistId={suppressArtistId}
         />
       </span>
+
+      {/*
+        Album column. Hidden below `lg` rather than allowed to shrink: at narrow widths it
+        would win space from the title, which is the one thing every row needs to stay
+        readable. `basis-0` keeps it from claiming more than its share of a wide row.
+      */}
+      {showAlbum && (
+        <span className="hidden min-w-0 flex-1 basis-0 truncate text-xs text-muted-foreground lg:block">
+          {track.album
+            ? (openAlbumForTrack && track.source !== "local" ? (
+              /*
+                A span with role="link", not an anchor or a button: the row itself is a
+                <button>, and nesting interactive elements is invalid markup that the parser
+                flattens. Same treatment ArtistLinks gives artist names, and the pointerdown
+                has to stop too or the row's drag-reorder claims the gesture.
+              */
+              <span
+                role="link"
+                tabIndex={0}
+                className="cursor-pointer rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openAlbumForTrack(track);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openAlbumForTrack(track);
+                }}
+              >
+                {track.album}
+              </span>
+            ) : track.album)
+            : ""}
+        </span>
+      )}
 
       {/* Hover actions. The row itself is a <button>, so these cannot be buttons — see
           QuickAction. They sit before `trailing` so durations stay hard against the edge. */}

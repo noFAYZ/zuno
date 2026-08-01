@@ -273,6 +273,7 @@ export function LibraryPage({
                 key={`${track.id}:${index}`}
                 track={track}
                 index={index}
+                showAlbum
                 isCurrent={currentTrackId === track.id}
                 isPlaying={isPlaying && currentTrackId === track.id}
                 isSelected={selection.isSelected(track.id)}

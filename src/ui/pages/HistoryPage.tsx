@@ -143,6 +143,7 @@ export function HistoryPage({
                 key={`${entry.playedAt}:${entry.track.id}`}
                 track={entry.track}
                 index={index}
+                showAlbum
                 isCurrent={currentTrackId === entry.track.id}
                 isPlaying={isPlaying && currentTrackId === entry.track.id}
                 onSelect={() => playFrom(day, entry.track)}

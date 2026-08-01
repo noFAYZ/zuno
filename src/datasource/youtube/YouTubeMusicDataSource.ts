@@ -323,7 +323,9 @@ const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist
  * v9: and v8 could hold a cropped one; artist pictures are carried between syncs, so they only
  * change when the key does.
  */
-const LIBRARY_CACHE_KEY = "youtube-music:library:v9";
+// v10: album names are no longer guessed from whatever column was left over, so entries
+// parsed under the old rule carry release years and play counts where an album should be.
+const LIBRARY_CACHE_KEY = "youtube-music:library:v10";
 /** The account the user picked by hand, which outranks the automatic probe. */
 /**
  * Content playback nonce — 16 characters from the alphabet YouTube's own player draws on.
@@ -341,10 +343,10 @@ function createPlaybackNonce(): string {
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 // v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
 // channel avatar — so anything cached under the older shape-and-crop rules has to go.
-const ARTIST_CACHE_VERSION = "v7";
+const ARTIST_CACHE_VERSION = "v8";
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
-const PLAYLIST_TRACK_CACHE_VERSION = "v4";
+const PLAYLIST_TRACK_CACHE_VERSION = "v5";
 const PLAYLIST_EMPTY_RETRY_DELAYS_MS = [0, 600, 1_500];
 
 class YouTubeMusicAuthError extends AuthExpiredError {}
@@ -884,55 +886,36 @@ export class YouTubeMusicDataSource extends DataSource {
       || column.title?.runs?.map((run) => run.text).filter(Boolean).join("");
   }
 
-  private isArtistColumn(column: MusicColumn): boolean {
-    return column.title?.runs?.some((run) => {
-      const browseId = this.findBrowseId(run.endpoint) ?? this.findBrowseId(run.navigationEndpoint);
-      return browseId?.startsWith("UC");
-    }) ?? false;
-  }
-
+  /**
+   * Whether a column links to an album, as opposed to anything else that happens to be linked.
+   *
+   * "Not a channel" was too loose: a playlist link (`VL`/`PL`/`OLAK`) passed it just as easily,
+   * so a row whose second column pointed at a playlist reported that playlist as its album.
+   * Album browse ids are `MPRE`-prefixed, and that is the only thing worth trusting here.
+   */
   private isAlbumColumn(column: MusicColumn): boolean {
     return column.title?.runs?.some((run) => {
       const browseId = this.findBrowseId(run.endpoint) ?? this.findBrowseId(run.navigationEndpoint);
-      return Boolean(browseId && !browseId.startsWith("UC"));
+      return Boolean(browseId?.startsWith("MPRE"));
     }) ?? false;
   }
 
+  /**
+   * The album a row belongs to, or nothing.
+   *
+   * Only a genuinely linked album column counts. There used to be a fallback that scanned the
+   * remaining columns and returned the first string that was not the title, an artist, a
+   * duration or a view count — which meant release years, "Song"/"Video" type labels, plain
+   * play counts and playlist names all got reported as albums. A blank cell is right far more
+   * often than a guess: a single, a video or a user upload genuinely has no album, and the
+   * linked column is present whenever one does.
+   */
   private getTrackAlbumName(item: MusicItem): string | undefined {
-    const title = this.getTitle(item);
-    const artistNames = new Set(
-      [
-        this.getArtistName(item),
-        ...(this.getArtists(item)?.map((artist) => artist.name) ?? []),
-      ]
-        .flatMap((value) => value.split(","))
-        .map((value) => value.trim().toLocaleLowerCase())
-        .filter(Boolean),
-    );
-
     const linkedAlbum = (item.flex_columns ?? [])
       .slice(1)
       .find((column) => this.isAlbumColumn(column));
-    const linkedAlbumText = linkedAlbum ? this.getColumnText(linkedAlbum)?.trim() : undefined;
-    if (linkedAlbumText) return linkedAlbumText;
-
-    const candidates = [
-      ...(item.flex_columns ?? [])
-        .slice(1)
-        .filter((column) => !this.isArtistColumn(column))
-        .map((column) => this.getColumnText(column)),
-      ...(item.fixed_columns ?? []).map((column) => this.getColumnText(column)),
-    ]
-      .map((value) => value?.trim())
-      .filter((value): value is string => Boolean(value));
-
-    return candidates.find((value) => {
-      const normalized = value.toLocaleLowerCase();
-      return normalized !== title?.toLocaleLowerCase()
-        && !artistNames.has(normalized)
-        && !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(value)
-        && !/\bviews?\b|\bplays?\b/i.test(value);
-    });
+    if (!linkedAlbum) return undefined;
+    return this.getColumnText(linkedAlbum)?.trim() || undefined;
   }
 
   private getTitle(item: MusicItem): string | null {
@@ -5431,7 +5414,30 @@ export class YouTubeMusicDataSource extends DataSource {
 
     try {
       const yt = await this.getMusicClient();
-      const raw = await yt.actions.execute("/player", { videoId: track.id, parse: false });
+      /*
+       * The same body `getBasicInfo` sends, not just `{ videoId, context }`.
+       *
+       * A bare videoId is answered with a ~5 KB stub that carries no streaming data and no
+       * `playbackTracking` at all — which is why every scrobble logged "no tracking urls"
+       * against a 200. `playbackContext.signatureTimestamp` is what makes YouTube treat this
+       * as a real playback request; the two check flags keep age- and content-gated tracks
+       * from degrading to the same stub.
+       */
+      const raw = await yt.actions.execute("/player", {
+        videoId: track.id,
+        racyCheckOk: true,
+        contentCheckOk: true,
+        playbackContext: {
+          contentPlaybackContext: {
+            vis: 0,
+            splay: false,
+            lactMilliseconds: "-1",
+            signatureTimestamp: (yt.session as { player?: { signature_timestamp?: number } })
+              .player?.signature_timestamp,
+          },
+        },
+        parse: false,
+      });
       const tracking = (raw as any)?.data?.playbackTracking ?? (raw as any)?.playbackTracking;
       const playbackUrl = tracking?.videostatsPlaybackUrl?.baseUrl;
       const watchtimeUrl = tracking?.videostatsWatchtimeUrl?.baseUrl;

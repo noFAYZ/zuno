@@ -30,6 +30,14 @@ export interface TrackContextMenuValue {
   toggleTrackLike: (track: Track) => Promise<void>;
   /** Three-valued rating. toggleTrackLike is the like-only shorthand over the same path. */
   rateTrack: (track: Track, rating: TrackRating) => Promise<void>;
+  /**
+   * Opens the album a track belongs to, resolving it by name first.
+   *
+   * Shared by the context menu item and the album link in `TrackRow`, so the two cannot end up
+   * doing different things. Null when the host has not supplied a handler, which is what lets
+   * both surfaces hide the affordance rather than offer a dead one.
+   */
+  openAlbumForTrack: ((track: Track) => void) | null;
 }
 
 export const TrackContextMenuContext = createContext<TrackContextMenuValue | null>(null);

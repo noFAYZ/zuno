@@ -28,6 +28,7 @@ import {
 } from "@/components/motion/select";
 import {
   BugIcon,
+  DownloadIcon,
   FolderAddIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -35,10 +36,12 @@ import {
   LastFmIcon,
   LogFileIcon,
   LogoutIcon,
+  LyricsIcon,
   PaletteIcon,
   PlayIcon,
   QueuePanelIcon,
   RefreshIcon,
+  SettingsIcon,
   StarIcon,
   TrashIcon,
   UserIcon,
@@ -1108,421 +1111,480 @@ export function SettingsPage({
       )}
 
       {activeTab === "system" && (
-        <div className="flex flex-col gap-5" role="tabpanel" aria-label="System settings">
-          <section className={SETTINGS_CARD} aria-labelledby="system-settings-title">
-            <h2 className="text-lg font-semibold text-foreground" id="system-settings-title">
-              System
-            </h2>
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="Library settings">
+          <section className={SETTINGS_CARD} aria-labelledby="library-local-title">
+            <SettingsCardHeader
+              title="Local music"
+              titleId="library-local-title"
+              icon={<FolderIcon size={18} aria-hidden="true" />}
+              description="Folders on this computer, scanned into playlists."
+            />
 
-            <div className="flex flex-col gap-5">
-              <SettingToggle
-                title="Launch at startup"
-                description="Start Zuno when your computer starts."
-                checked={autostartEnabled}
-                disabled={autostartLoading}
-                onCheckedChange={(checked) => void handleAutostartChange(checked)}
-              />
-
-              {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
-
-              <SettingRow
-                title="Streaming quality"
-                description="Applies to songs played over the network. Lower uses less data."
-              >
-                {(labelId) => (
-                  <Select
-                    className="w-52"
-                    value={streamingQuality}
-                    onValueChange={(value) => setStreamingQuality(value as AudioQuality)}
-                  >
-                    <SelectTrigger aria-labelledby={labelId}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
-                        <SelectItem key={quality} value={quality}>
-                          {AUDIO_QUALITY_LABELS[quality]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </SettingRow>
-
-              <SettingRow
-                title="Download quality"
-                description="Applies to songs saved for offline. Higher sounds better and uses more disk."
-              >
-                {(labelId) => (
-                  <Select
-                    className="w-52"
-                    value={downloadQuality}
-                    onValueChange={(value) => setDownloadQuality(value as AudioQuality)}
-                  >
-                    <SelectTrigger aria-labelledby={labelId}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
-                        <SelectItem key={quality} value={quality}>
-                          {AUDIO_QUALITY_LABELS[quality]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </SettingRow>
-
-              <SettingRow
-                title="Translate lyrics"
-                description="Shows a translation under each line. Sends the lyrics to Google Translate."
-              >
-                {(labelId) => (
-                  <Select
-                    className="w-52"
-                    value={lyricsTranslationLang}
-                    onValueChange={setLyricsTranslationLang}
-                  >
-                    <SelectTrigger aria-labelledby={labelId}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={TRANSLATION_OFF}>Off</SelectItem>
-                      {TRANSLATION_LANGUAGES.map((code) => (
-                        <SelectItem key={code} value={code}>
-                          {getLanguageLabel(code)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </SettingRow>
-
-              <SettingRow
-                title="Lyrics text size"
-                description="Scales the lyrics screen. The size still adapts to the window on top of this."
-              >
-                {(labelId) => (
-                  <Select
-                    className="w-52"
-                    value={String(lyricsFontScale)}
-                    onValueChange={(value) => setLyricsFontScale(Number(value))}
-                  >
-                    <SelectTrigger aria-labelledby={labelId}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LYRICS_FONT_SCALES.map((option) => (
-                        <SelectItem key={option.value} value={String(option.value)}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </SettingRow>
-
-              <SettingRow
-                title="Preferred lyrics source"
-                description="Tried first when a song opens. If it has nothing for that song, the others still run."
-              >
-                {(labelId) => (
-                  <Select
-                    className="w-52"
-                    value={preferredLyricsSource}
-                    onValueChange={setPreferredLyricsSourceId}
-                  >
-                    <SelectTrigger aria-labelledby={labelId}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={AUTO_LYRICS_SOURCE}>Automatic</SelectItem>
-                      {LYRICS_SOURCES.map((source) => (
-                        <SelectItem key={source.id} value={source.id}>
-                          {source.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </SettingRow>
-
-              <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
                 <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
-                  <strong>Downloads</strong>
-                  <span>
-                    {offlineState.usedBytes > 0 || Object.keys(offlineState.entries).length > 0
-                      ? `${Object.keys(offlineState.entries).length} songs · ${formatBytes(offlineState.usedBytes)}`
-                      : "No songs downloaded yet."}
-                    {offlineState.downloadingId
-                      ? offlineState.progress !== null
-                        ? ` · downloading ${offlineState.progress}%`
-                        : " · downloading"
-                      : ""}
-                    {offlineState.queued.length > 0
-                      ? ` · ${offlineState.queued.length} queued`
-                      : ""}
-                  </span>
+                  <strong>Local playlists</strong>
+                  <span>Create playlists from folders on this computer.</span>
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    Maximum size
-                    <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
-                      <input
-                        className="w-full min-w-0 bg-transparent outline-none"
-                        type="number"
-                        min={1}
-                        max={512}
-                        value={Math.round(offlineMaxGb)}
-                        onChange={(event) => {
-                          const next = Number(event.target.value);
-                          if (!Number.isFinite(next)) return;
-                          setOfflineMaxGb(next);
-                          setOfflineMaxBytes(Math.max(1, next) * 1024 ** 3);
-                        }}
-                        aria-label="Maximum download size in gigabytes"
-                      />
-                      <span className="shrink-0 text-xs text-muted-foreground">GB</span>
-                    </span>
-                  </label>
-                  <button
-                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    type="button"
-                    disabled={clearingDownloads || Object.keys(offlineState.entries).length === 0}
-                    onClick={() => {
-                      setClearingDownloads(true);
-                      void removeAllDownloads().finally(() => setClearingDownloads(false));
+                  <input
+                    className={cn(SETTINGS_FIELD, "w-44")}
+                    type="text"
+                    value={localPlaylistName}
+                    placeholder="Playlist name"
+                    aria-label="Local playlist name"
+                    onChange={(event) => setLocalPlaylistName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") handleCreateLocalPlaylist();
                     }}
+                  />
+                  <button
+                    className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    type="button"
+                    onClick={handleCreateLocalPlaylist}
                   >
-                    <TrashIcon size={18} />
-                    {clearingDownloads ? "Removing..." : "Remove all"}
+                    <FolderAddIcon size={18} />
+                    Create
                   </button>
                 </div>
               </div>
 
-              <SettingToggle
-                title="Minimize to tray"
-                description="Closing the window hides Zuno to the system tray and keeps playing. Quit from the tray icon."
-                checked={minimizeToTray}
-                onCheckedChange={setMinimizeToTray}
-              />
+              {localPlaylistError && <p className="text-sm text-destructive">{localPlaylistError}</p>}
 
-              <SettingToggle
-                title="Remember window size and location"
-                description="Reopen the main window with its last size and screen position."
-                checked={mainWindowGeometryPersistenceEnabled}
-                onCheckedChange={setMainWindowGeometryPersistenceEnabled}
-              />
-
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-end justify-between gap-3">
-                  <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
-                    <strong>Local playlists</strong>
-                    <span>Create playlists from folders on this computer.</span>
-                  </span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <input
-                      className={cn(SETTINGS_FIELD, "w-44")}
-                      type="text"
-                      value={localPlaylistName}
-                      placeholder="Playlist name"
-                      aria-label="Local playlist name"
-                      onChange={(event) => setLocalPlaylistName(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") handleCreateLocalPlaylist();
-                      }}
-                    />
-                    <button
-                      className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                      type="button"
-                      onClick={handleCreateLocalPlaylist}
-                    >
-                      <FolderAddIcon size={18} />
-                      Create
-                    </button>
-                  </div>
-                </div>
-
-                {localPlaylistError && <p className="text-sm text-destructive">{localPlaylistError}</p>}
-
-                {localPlaylists.length > 0 && (
-                  <div className="flex flex-col gap-1.5">
-                    {localPlaylists.map((playlist) => (
-                      <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={playlist.id}>
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-foreground">
-                            <FolderIcon size={18} aria-hidden="true" />
-                            {playlist.name}
-                          </span>
-                          <button
-                            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                            type="button"
-                            onClick={() => deleteLocalPlaylist(playlist.id)}
-                          >
-                            <TrashIcon size={18} />
-                            Delete
-                          </button>
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                          <span className="flex items-center gap-2">
-                            <input
-                              className={cn(SETTINGS_FIELD, "flex-1")}
-                              type="text"
-                              value={localPlaylistPathInputs[playlist.id] ?? ""}
-                              placeholder="/Users/name/Music"
-                              aria-label={`Folder path for ${playlist.name}`}
-                              onChange={(event) => setLocalPlaylistPathInputs((current) => ({
-                                ...current,
-                                [playlist.id]: event.target.value,
-                              }))}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") handleAddLocalPlaylistPath(playlist.id);
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                              disabled={localPlaylistBrowsingId === playlist.id}
-                              title="Browse for folder"
-                              aria-label={`Browse for a folder for ${playlist.name}`}
-                              onClick={() => void handleBrowseLocalPlaylistPath(playlist.id)}
-                            >
-                              <FolderOpenIcon size={17} aria-hidden="true" />
-                            </button>
-                          </span>
-                          <button
-                            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                            type="button"
-                            onClick={() => handleAddLocalPlaylistPath(playlist.id)}
-                          >
-                            Add
-                          </button>
-                        </div>
-
-                        {playlist.paths.length > 0 ? (
-                          <div className="flex flex-col gap-1.5">
-                            {playlist.paths.map((path) => (
-                              <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={path}>
-                                <span>{path}</span>
-                                <button
-                                  type="button"
-                                  aria-label={`Remove ${path}`}
-                                  onClick={() => removeLocalPlaylistPath(playlist.id, path)}
-                                >
-                                  <TrashIcon size={16} aria-hidden="true" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="px-1 py-3 text-sm text-muted-foreground">No paths added yet.</p>
-                        )}
+              {localPlaylists.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  {localPlaylists.map((playlist) => (
+                    <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={playlist.id}>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-foreground">
+                          <FolderIcon size={18} aria-hidden="true" />
+                          {playlist.name}
+                        </span>
+                        <button
+                          className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                          type="button"
+                          onClick={() => deleteLocalPlaylist(playlist.id)}
+                        >
+                          <TrashIcon size={18} />
+                          Delete
+                        </button>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
-                  <strong>Application log</strong>
-                  <span>Open the current log file for sharing or troubleshooting.</span>
+                      <div className="flex flex-col gap-2">
+                        <span className="flex items-center gap-2">
+                          <input
+                            className={cn(SETTINGS_FIELD, "flex-1")}
+                            type="text"
+                            value={localPlaylistPathInputs[playlist.id] ?? ""}
+                            placeholder="/Users/name/Music"
+                            aria-label={`Folder path for ${playlist.name}`}
+                            onChange={(event) => setLocalPlaylistPathInputs((current) => ({
+                              ...current,
+                              [playlist.id]: event.target.value,
+                            }))}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") handleAddLocalPlaylistPath(playlist.id);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                            disabled={localPlaylistBrowsingId === playlist.id}
+                            title="Browse for folder"
+                            aria-label={`Browse for a folder for ${playlist.name}`}
+                            onClick={() => void handleBrowseLocalPlaylistPath(playlist.id)}
+                          >
+                            <FolderOpenIcon size={17} aria-hidden="true" />
+                          </button>
+                        </span>
+                        <button
+                          className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                          type="button"
+                          onClick={() => handleAddLocalPlaylistPath(playlist.id)}
+                        >
+                          Add
+                        </button>
+                      </div>
+
+                      {playlist.paths.length > 0 ? (
+                        <div className="flex flex-col gap-1.5">
+                          {playlist.paths.map((path) => (
+                            <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={path}>
+                              <span>{path}</span>
+                              <button
+                                type="button"
+                                aria-label={`Remove ${path}`}
+                                onClick={() => removeLocalPlaylistPath(playlist.id, path)}
+                              >
+                                <TrashIcon size={16} aria-hidden="true" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="px-1 py-3 text-sm text-muted-foreground">No paths added yet.</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="library-storage-title">
+            <SettingsCardHeader
+              title="Storage"
+              titleId="library-storage-title"
+              icon={<DownloadIcon size={18} aria-hidden="true" />}
+              description="How much disk Zuno is allowed to use."
+            />
+
+            <div className="flex flex-wrap items-end justify-between gap-4 py-2">
+              <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
+                <strong>Cache</strong>
+                <span className="tabular-nums">
+                  {cacheStats
+                    ? `${formatBytes(cacheStats.usedBytes)} of ${formatBytes(cacheStats.maxBytes)}`
+                    : "Loading…"}
+                  {cacheStats ? ` · ${cacheStats.entryCount} items` : ""}
                 </span>
+              </span>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* The caption sits above the field rather than inside it: nested in a
+                    fixed-width pill it wrapped onto two lines and squeezed the number. */}
+                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  Maximum size
+                  <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
+                    <input
+                      className="w-full min-w-0 bg-transparent tabular-nums outline-none"
+                      type="number"
+                      min="0.25"
+                      max="64"
+                      step="0.25"
+                      value={cacheSizeGb}
+                      disabled={cacheBusy}
+                      onChange={(event) => setCacheSizeGb(event.target.value)}
+                    />
+                    <span className="shrink-0 text-muted-foreground">GB</span>
+                  </span>
+                </label>
                 <button
                   className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
-                  disabled={logOpening}
-                  onClick={() => void handleOpenLog()}
+                  disabled={cacheBusy}
+                  onClick={() => void saveCacheSize()}
                 >
-                  <LogFileIcon size={18} />
-                  {logOpening ? "Opening..." : "Open log"}
+                  Save
                 </button>
-              </div>
-
-              {logError && <p className="text-sm text-destructive">{logError}</p>}
-
-              <SettingToggle
-                title="Potato PC mode"
-                description="Disables animations, blur effects, and the animated star background."
-                checked={paperPcMode}
-                onCheckedChange={setPaperPcMode}
-              />
-
-              <div className="flex flex-wrap items-end justify-between gap-4 py-2">
-                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
-                  <strong>Cache</strong>
-                  <span className="tabular-nums">
-                    {cacheStats
-                      ? `${formatBytes(cacheStats.usedBytes)} of ${formatBytes(cacheStats.maxBytes)}`
-                      : "Loading…"}
-                    {cacheStats ? ` · ${cacheStats.entryCount} items` : ""}
-                  </span>
-                </span>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* The caption sits above the field rather than inside it: nested in a
-                      fixed-width pill it wrapped onto two lines and squeezed the number. */}
-                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                    Maximum size
-                    <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
-                      <input
-                        className="w-full min-w-0 bg-transparent tabular-nums outline-none"
-                        type="number"
-                        min="0.25"
-                        max="64"
-                        step="0.25"
-                        value={cacheSizeGb}
-                        disabled={cacheBusy}
-                        onChange={(event) => setCacheSizeGb(event.target.value)}
-                      />
-                      <span className="shrink-0 text-muted-foreground">GB</span>
-                    </span>
-                  </label>
-                  <button
-                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    type="button"
-                    disabled={cacheBusy}
-                    onClick={() => void saveCacheSize()}
-                  >
-                    Save
-                  </button>
-                  <button
-                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    type="button"
-                    disabled={cacheBusy}
-                    onClick={() => void handleClearCache()}
-                  >
-                    <TrashIcon size={18} />
-                    Clear cache
-                  </button>
-                </div>
-              </div>
-
-              {cacheError && <p className="text-sm text-destructive">{cacheError}</p>}
-
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
-                  <strong>Delete all app data</strong>
-                  <span>Reset settings, cache, account, queue, tabs, onboarding, and local data.</span>
-                </span>
                 <button
                   className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
-                  disabled={resetSettingsBusy}
-                  onClick={() => void handleClearAllSettings()}
+                  disabled={cacheBusy}
+                  onClick={() => void handleClearCache()}
                 >
                   <TrashIcon size={18} />
-                  {resetSettingsBusy
-                    ? "Deleting..."
-                    : resetSettingsConfirming
-                      ? "Press again to confirm"
-                      : "Delete everything"}
+                  Clear cache
                 </button>
               </div>
-
-              {resetSettingsError && <p className="text-sm text-destructive">{resetSettingsError}</p>}
             </div>
+
+            {cacheError && <p className="text-sm text-destructive">{cacheError}</p>}
+
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
+                <strong>Downloads</strong>
+                <span>
+                  {offlineState.usedBytes > 0 || Object.keys(offlineState.entries).length > 0
+                    ? `${Object.keys(offlineState.entries).length} songs · ${formatBytes(offlineState.usedBytes)}`
+                    : "No songs downloaded yet."}
+                  {offlineState.downloadingId
+                    ? offlineState.progress !== null
+                      ? ` · downloading ${offlineState.progress}%`
+                      : " · downloading"
+                    : ""}
+                  {offlineState.queued.length > 0
+                    ? ` · ${offlineState.queued.length} queued`
+                    : ""}
+                </span>
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                  Maximum size
+                  <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
+                    <input
+                      className="w-full min-w-0 bg-transparent outline-none"
+                      type="number"
+                      min={1}
+                      max={512}
+                      value={Math.round(offlineMaxGb)}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        if (!Number.isFinite(next)) return;
+                        setOfflineMaxGb(next);
+                        setOfflineMaxBytes(Math.max(1, next) * 1024 ** 3);
+                      }}
+                      aria-label="Maximum download size in gigabytes"
+                    />
+                    <span className="shrink-0 text-xs text-muted-foreground">GB</span>
+                  </span>
+                </label>
+                <button
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  type="button"
+                  disabled={clearingDownloads || Object.keys(offlineState.entries).length === 0}
+                  onClick={() => {
+                    setClearingDownloads(true);
+                    void removeAllDownloads().finally(() => setClearingDownloads(false));
+                  }}
+                >
+                  <TrashIcon size={18} />
+                  {clearingDownloads ? "Removing..." : "Remove all"}
+                </button>
+              </div>
+            </div>
+
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="library-quality-title">
+            <SettingsCardHeader
+              title="Quality"
+              titleId="library-quality-title"
+              icon={<PlayIcon size={18} aria-hidden="true" />}
+              description="Bitrate picked when a track is streamed or saved."
+            />
+
+            <SettingRow
+              title="Streaming quality"
+              description="Applies to songs played over the network. Lower uses less data."
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={streamingQuality}
+                  onValueChange={(value) => setStreamingQuality(value as AudioQuality)}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
+                      <SelectItem key={quality} value={quality}>
+                        {AUDIO_QUALITY_LABELS[quality]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+
+            <SettingRow
+              title="Download quality"
+              description="Applies to songs saved for offline. Higher sounds better and uses more disk."
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={downloadQuality}
+                  onValueChange={(value) => setDownloadQuality(value as AudioQuality)}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
+                      <SelectItem key={quality} value={quality}>
+                        {AUDIO_QUALITY_LABELS[quality]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="library-lyrics-title">
+            <SettingsCardHeader
+              title="Lyrics"
+              titleId="library-lyrics-title"
+              icon={<LyricsIcon size={18} aria-hidden="true" />}
+              description="Where lyrics come from and how they read."
+            />
+
+            <SettingRow
+              title="Translate lyrics"
+              description="Shows a translation under each line. Sends the lyrics to Google Translate."
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={lyricsTranslationLang}
+                  onValueChange={setLyricsTranslationLang}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={TRANSLATION_OFF}>Off</SelectItem>
+                    {TRANSLATION_LANGUAGES.map((code) => (
+                      <SelectItem key={code} value={code}>
+                        {getLanguageLabel(code)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+
+            <SettingRow
+              title="Lyrics text size"
+              description="Scales the lyrics screen. The size still adapts to the window on top of this."
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={String(lyricsFontScale)}
+                  onValueChange={(value) => setLyricsFontScale(Number(value))}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {LYRICS_FONT_SCALES.map((option) => (
+                      <SelectItem key={option.value} value={String(option.value)}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+
+            <SettingRow
+              title="Preferred lyrics source"
+              description="Tried first when a song opens. If it has nothing for that song, the others still run."
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={preferredLyricsSource}
+                  onValueChange={setPreferredLyricsSourceId}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={AUTO_LYRICS_SOURCE}>Automatic</SelectItem>
+                    {LYRICS_SOURCES.map((source) => (
+                      <SelectItem key={source.id} value={source.id}>
+                        {source.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
+
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="library-system-title">
+            <SettingsCardHeader
+              title="System"
+              titleId="library-system-title"
+              icon={<SettingsIcon size={18} aria-hidden="true" />}
+              description="How Zuno behaves outside the window."
+            />
+
+            <SettingToggle
+              title="Launch at startup"
+              description="Start Zuno when your computer starts."
+              checked={autostartEnabled}
+              disabled={autostartLoading}
+              onCheckedChange={(checked) => void handleAutostartChange(checked)}
+            />
+
+            {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
+
+
+            <SettingToggle
+              title="Minimize to tray"
+              description="Closing the window hides Zuno to the system tray and keeps playing. Quit from the tray icon."
+              checked={minimizeToTray}
+              onCheckedChange={setMinimizeToTray}
+            />
+
+
+            <SettingToggle
+              title="Remember window size and location"
+              description="Reopen the main window with its last size and screen position."
+              checked={mainWindowGeometryPersistenceEnabled}
+              onCheckedChange={setMainWindowGeometryPersistenceEnabled}
+            />
+
+
+            <SettingToggle
+              title="Potato PC mode"
+              description="Disables animations, blur effects, and the animated star background."
+              checked={paperPcMode}
+              onCheckedChange={setPaperPcMode}
+            />
+
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="library-trouble-title">
+            <SettingsCardHeader
+              title="Troubleshooting"
+              titleId="library-trouble-title"
+              icon={<BugIcon size={18} aria-hidden="true" />}
+              description="Diagnostics, and the irreversible reset."
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
+                <strong>Application log</strong>
+                <span>Open the current log file for sharing or troubleshooting.</span>
+              </span>
+              <button
+                className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                type="button"
+                disabled={logOpening}
+                onClick={() => void handleOpenLog()}
+              >
+                <LogFileIcon size={18} />
+                {logOpening ? "Opening..." : "Open log"}
+              </button>
+            </div>
+
+            {logError && <p className="text-sm text-destructive">{logError}</p>}
+
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
+                <strong>Delete all app data</strong>
+                <span>Reset settings, cache, account, queue, tabs, onboarding, and local data.</span>
+              </span>
+              <button
+                className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                type="button"
+                disabled={resetSettingsBusy}
+                onClick={() => void handleClearAllSettings()}
+              >
+                <TrashIcon size={18} />
+                {resetSettingsBusy
+                  ? "Deleting..."
+                  : resetSettingsConfirming
+                    ? "Press again to confirm"
+                    : "Delete everything"}
+              </button>
+            </div>
+
+            {resetSettingsError && <p className="text-sm text-destructive">{resetSettingsError}</p>}
           </section>
         </div>
       )}
@@ -1776,7 +1838,12 @@ export function SettingsPage({
               title="Add plays to YouTube Music history"
               description="Reports plays to YouTube, feeding its recommendations. Also enables the setting above. The YouTube frame always reports its own."
               checked={youtubeScrobbling}
-              onCheckedChange={setYouTubeScrobbling}
+              onCheckedChange={(enabled) => {
+                // Paired here rather than inside the setter, so the toolbar shortcut can flip
+                // scrobbling on its own without silently changing stream resolution too.
+                setYouTubeScrobbling(enabled);
+                setAuthenticatedStreaming(enabled);
+              }}
             />
           </section>
 

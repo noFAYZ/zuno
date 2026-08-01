@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import { AlbumIcon, CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track, TrackRating } from "../../datasource/types";
 import {
   TrackContextMenuContext,
@@ -65,6 +65,8 @@ interface TrackContextMenuProviderProps {
   libraryController: LibraryController;
   /** Absent hides the "Show related" item, for surfaces with nowhere to navigate to. */
   onOpenRelated?: (track: Track) => void;
+  /** Resolving a track to its album needs a lookup, so the page owns it. */
+  onOpenAlbum?: (track: Track) => void;
 }
 
 /* Re-exported so the dozen existing `from "./TrackContextMenu"` imports keep working — the
@@ -75,6 +77,7 @@ export function TrackContextMenuProvider({
   children,
   libraryController,
   onOpenRelated,
+  onOpenAlbum,
 }: TrackContextMenuProviderProps) {
   const libraryState = useLibraryState();
   const playerState = usePlayerSelector((player) => ({ currentTrack: player.currentTrack }), shallowEqual);
@@ -514,8 +517,8 @@ export function TrackContextMenuProvider({
    * close over a dozen pieces of state. Dependency lists that long are wrong eventually, and
    * being wrong here means a menu acting on the previous track. The ref is always current.
    */
-  const handlersRef = useRef({ openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack });
-  handlersRef.current = { openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack };
+  const handlersRef = useRef({ openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack, onOpenAlbum });
+  handlersRef.current = { openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack, onOpenAlbum };
 
   const contextValue = useMemo<TrackContextMenuValue>(
     () => ({
@@ -525,8 +528,12 @@ export function TrackContextMenuProvider({
         handlersRef.current.openPlaylistPicker(selectedTrack, batch),
       toggleTrackLike: (selectedTrack) => handlersRef.current.toggleTrackLike(selectedTrack),
       rateTrack: (selectedTrack, rating) => handlersRef.current.rateTrack(selectedTrack, rating),
+      /* Read through the ref so the identity stays stable — this context wraps every row. */
+      openAlbumForTrack: onOpenAlbum
+        ? (selectedTrack) => handlersRef.current.onOpenAlbum?.(selectedTrack)
+        : null,
     }),
-    [],
+    [Boolean(onOpenAlbum)],
   );
 
   return (
@@ -627,6 +634,21 @@ export function TrackContextMenuProvider({
             </button>
           )}
           {/* Streamed tracks only: a local file has no YouTube page to be related to. */}
+          {onOpenAlbum && track?.album && track.source !== "local" && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => {
+                const selected = track;
+                setMenuPosition(null);
+                onOpenAlbum(selected);
+              }}
+            >
+              <AlbumIcon size={18} aria-hidden="true" />
+              <span className="flex-1 truncate">Go to album</span>
+            </button>
+          )}
           {onOpenRelated && track && track.source !== "local" && (
             <button
               type="button"

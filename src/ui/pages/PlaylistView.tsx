@@ -835,6 +835,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                   key={getTrackRenderKey(track, index)}
                   track={track}
                   index={index}
+                  showAlbum
                   isCurrent={isCurrent}
                   isPlaying={isCurrentPlaying}
                   data-playlist-track-path={trackPath}
