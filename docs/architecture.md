@@ -185,7 +185,7 @@ Cache keys are versioned strings (`youtube-music:library:v5`, `youtube-music:tra
 |---|---|
 | `AudioEngine.ts` | Owns **two** hidden YouTube IFrame decks plus an optional `HTMLAudioElement`, and routes between them on `shouldUseNativeAudio()` — a live read of the audio-engine setting, so a change takes effect on the next track rather than the next launch. The standby deck holds the *next* track already cued, which is what makes transitions gapless; with a non-zero crossfade the two decks' volumes are ramped past each other. **Neither applies in native mode**, which has no deck to preload onto. `releaseIframePlayer()` frees the decks (and their subframe process) without disposing the engine; a module-level listener calls it on every engine except the current playback owner when the setting flips to native. `playbackClaimId` + `playbackOwner` guarantee only one engine makes sound at a time. |
 | `Queue.ts` | Pure queue data structure with three regions: played/current, a **manual queue** segment (`playNext` / `addToQueue`), and automatic upcoming tracks. Shuffle only touches the automatic region and remembers the original order so it can be restored. `move()` rejects cross-region moves. |
-| `PlayerController.ts` | One per tab. Orchestrates DataSource → AudioEngine → Queue, playback order (shuffle and repeat compose independently), crossfade/gapless settings, playback rate, stop-after-track, radio/autoplay refills, history, error surfacing, session export/restore, and Discord presence updates. |
+| `PlayerController.ts` | One per tab. Orchestrates DataSource → AudioEngine → Queue, playback order (shuffle and repeat compose independently), crossfade/gapless settings, playback rate, stop-after-track, radio/autoplay refills, history, error surfacing, session export/restore, and Discord presence updates. Warms the next track as soon as the current one starts — its metadata always, its audio too on the native engine — because a skip lands whenever the listener decides, not only in the last few seconds. |
 | `TabManager.ts` | Owns the `Map<tabId, PlayerController>`. Distinguishes the **focused** tab (what you're looking at) from the **playback owner** (what's making sound), and suspends/resumes engines on switch. |
 | `playerStore.ts` | Composition root: constructs the data source and the three controllers, restores the persisted session, and exposes `usePlayerState` / `usePlayerSelector` / `usePlayerSession` / `useLibraryState` plus an `ActivePlayerController` facade that always targets the right tab. |
 | `LibraryController.ts` | Sign-in/out, account switching, staged auth progress (`browser → session → library`), library snapshot loading with timeouts and post-sign-in retries, silent session recovery, optimistic like/rating mutations with rollback, and local-playlist merging. |
@@ -203,6 +203,11 @@ Cache keys are versioned strings (`youtube-music:library:v5`, `youtube-music:tra
 | `useMediaSession.ts` | Bridges player state to Windows SMTC (via `update_windows_media_session` + `windows-media-control` events) or, elsewhere, the WebView `navigator.mediaSession`. |
 | `shuffleTracks.ts` | Fisher–Yates helper. |
 | `Recommender.ts` | **Dead code** — returns `[]`, nothing imports it. |
+
+**Account-facing choices** live in `ui/settings/youtubeAccount.ts`: whether playback resolves
+streams with the session attached, and whether finished plays are reported to YouTube's history.
+Both default off — each changes what leaves the machine. Enabling scrobbling enables signed-in
+resolution with it; the reverse is not true, so signed-in playback without history is reachable.
 
 ### 3.4 `ui/` — React
 
@@ -298,7 +303,7 @@ letting a stale response overwrite state.
 | Track kind | Path |
 |---|---|
 | YouTube, streaming, `iframe` mode | No stream URL is fetched at all — the IFrame deck handles it from the video id. |
-| YouTube, streaming, `native` mode | `getStreamData` → `resolveStreamUrl` → `fetch_audio_source` downloads it, validates the MP4 `ftyp` box, and re-serves it from the local media server. |
+| YouTube, streaming, `native` mode | `getStreamData` → `resolveStreamUrl` → `fetch_audio_source` downloads it in parallel ranges and re-serves it from the local media server. The MP4 `ftyp` check only applies when MP4 was the format asked for — `high` now reaches Opus, which has no `ftyp` box. |
 | YouTube, downloaded | `offline_audio_source` serves the stored bytes from the media server, with Range support. No network. |
 | YouTube, download | `getStreamData` → Innertube `getBasicInfo` → best adaptive `audio/mp4` at the configured quality → decipher → PO token → `offline_audio_save` fetches it in 4 MiB ranges, 6 at a time, emitting progress. |
 | Local file | `local_audio_read` returns base64 bytes + a MIME type guessed from the extension; the frontend builds a `Blob` object URL. |
@@ -309,6 +314,12 @@ fixed it**: the download feature has used this same resolve-and-fetch path succe
 which is what made it safe to offer again as a setting. It stays opt-in because native resolves and
 downloads the whole track before the first sample plays (so a track starts slower) and because
 gapless and crossfade ride the standby IFrame deck, so neither applies to it.
+
+**Two resolvers, not one.** `resolveStreamUrl` (playback) and `resolveDownloadUrl` (offline queue)
+are thin wrappers over a shared private `resolveStream(track, quality, clientOrder)`. Only the
+playback one reads `usesAuthenticatedStreaming()`; the download one has no conditional and no
+import of it, so downloads cannot inherit the setting through a mis-edited branch. `playerStore`
+binds `resolveDownloadUrl` into the offline queue, which puts that guarantee at the wiring site.
 
 ### 4.4 Authentication
 
@@ -404,6 +415,7 @@ while `loadTrack`/`playTrackById` first *claim* the focused tab as the new owner
 | Integration | Where | Notes |
 |---|---|---|
 | Discord Rich Presence | `player/DiscordRPC.ts` → `discord_rpc_update` / `_clear` → `discord_rpc.rs` | Client id `1515682467154100344`. Timestamps derived from position so Discord shows a live progress bar. Artwork is forced to `i.ytimg.com/vi/<id>/hqdefault.jpg` for YouTube tracks because Google CDN hosts block Discord's fetcher. Toggleable (`ui/settings/discord.ts`). |
+| YouTube Music history | `YouTubeMusicDataSource.beginPlayReport` / `updatePlayReport`, driven by `PlayerController` | Off by default (`ui/settings/youtubeAccount.ts`). Native engine only — the IFrame embed reports its own plays, so pinging as well would double-count. A play counts only when reported watch time grows with real elapsed time: a single ping claiming a whole track was heard is accepted with 204 and recorded as nothing. |
 | Last.fm | `player/LastFm.ts` → `lastfm_*` → `lastfm.rs` | Desktop auth-token flow opened in the system browser; session key in the keyring; MD5 `api_sig` computed in Rust. |
 | Windows SMTC | `windows_media.rs` | `MediaPlayer`/`SystemMediaTransportControls` for the OS overlay, plus taskbar thumbnail toolbar buttons. Sends `windows-media-control` events back to JS. |
 | macOS Now Playing | `macos_media.rs` | `MPNowPlayingInfoCenter` via `objc2`. Requires `macOSPrivateApi: true`. |
@@ -425,7 +437,7 @@ webkit2gtk4.1 / gtk3 / libayatana-appindicator and recommends the GStreamer plug
 **Checks:** `npm run typecheck` (`tsc --noEmit`) and `npm run check` — the latter runs
 `scripts/run-checks.mjs`, which finds every `*.check.ts` under `src/`, bundles it with esbuild's JS
 API and runs each in its own process with a 30 s timeout. `npm run verify` is both. The Rust side
-has a `#[cfg(test)]` module in `lib.rs` (`cargo test`). There is no component/DOM test harness.
+has a `#[cfg(test)]` module in `lib.rs` — 14 tests (`cargo test`). There is no component/DOM test harness.
 
 **Repo layout beyond the app:** `landing/` is a separate Vite site for the product page,
 `packaging/` holds the AUR PKGBUILD and the Flatpak manifest, `manifests/` holds the winget
@@ -469,7 +481,7 @@ Recorded so nobody re-derives them:
 - Gapless and crossfade silently do nothing in `native` audio-engine mode — they ride the standby
   IFrame deck, which that mode has no equivalent of. The Settings copy says so, but nothing in the
   code prevents the combination.
-- `App.tsx` is 2150 lines with ~30 `useEffect` blocks, some at zero indentation — still the
+- `App.tsx` is 2156 lines with ~30 `useEffect` blocks, some at zero indentation — still the
   highest-value refactor target in the repo.
 - `getStreamUrl` on the YouTube Music data source is required by the abstract class but never called
   by the controllers.

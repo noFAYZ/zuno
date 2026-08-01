@@ -51,6 +51,14 @@ export abstract class DataSource {
   searchTracks?(query: string, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
   getSearchSuggestions?(query: string, onUpdate?: (suggestions: string[]) => void): Promise<string[]>;
   getStreamData?(track: Track): Promise<StreamData>;
+  /**
+   * Reports plays to the provider's own listening history.
+   *
+   * Optional and best-effort on both sides: a source that has no such concept simply omits
+   * them, and a failure to report must never affect playback.
+   */
+  beginPlayReport?(track: Track): Promise<void>;
+  updatePlayReport?(track: Track, positionSec: number, final: boolean): Promise<void>;
   restoreSession?(): Promise<boolean>;
   /**
    * Renews an expired session without involving the user. False means it genuinely lapsed and

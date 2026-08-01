@@ -16,6 +16,7 @@ import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
 import { hydrateTraySettings } from "./ui/settings/tray";
 import { hydrateAudioQualitySettings } from "./internal/audioQuality";
 import { hydrateAudioEngineMode } from "./ui/settings/audioEngine";
+import { hydrateYouTubeAccountSettings } from "./ui/settings/youtubeAccount";
 import { notifyLocalPlaylistsChanged, syncLocalAudioWatcher } from "./player/localPlaylists";
 import { listen } from "@tauri-apps/api/event";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
@@ -58,6 +59,7 @@ void Promise.all([
   hydrateTraySettings(),
   hydrateAudioQualitySettings(),
   hydrateAudioEngineMode(),
+  hydrateYouTubeAccountSettings(),
   hydrateLastFmSettings(),
   hydrateDiscordSettings(),
   hydrateSidebarSettings(),

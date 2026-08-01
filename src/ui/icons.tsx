@@ -115,6 +115,30 @@ export { MagicWandIcon as DiceIcon } from "@solar-icons/react/linear/magic-wand"
 export { MagicWandIcon as DiceActiveIcon } from "@solar-icons/react/bold/magic-wand";
 
 /**
+ * YouTube Music brand mark.
+ *
+ * Same reasoning as `GitHubIcon` and `LastFmIcon`: Solar ships no brand icons, and the header
+ * indicator has to be recognisable as YouTube Music rather than a generic play glyph sitting
+ * next to the Last.fm and Discord marks.
+ * Path from Simple Icons (CC0), sized/coloured like a Solar icon.
+ */
+export function YouTubeMusicIcon({ size = 24, ...props }: SVGProps<SVGSVGElement> & { size?: number | string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 19.104c-3.924 0-7.104-3.18-7.104-7.104S8.076 4.896 12 4.896s7.104 3.18 7.104 7.104-3.18 7.104-7.104 7.104zm0-13.332c-3.432 0-6.228 2.796-6.228 6.228S8.568 18.228 12 18.228s6.228-2.796 6.228-6.228S15.432 5.772 12 5.772zM9.6 15.6V8.4l6 3.6-6 3.6z" />
+    </svg>
+  );
+}
+
+/**
  * GitHub brand mark.
  *
  * Same reasoning as `LastFmIcon` below: Solar ships no brand icons, and a brand mark has to

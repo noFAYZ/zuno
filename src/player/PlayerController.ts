@@ -33,6 +33,15 @@ const TRANSITION_TICK_MS = 250;
  */
 const PRELOAD_LEAD_SEC = 20;
 
+/**
+ * How often a play in progress is reported to the provider's history.
+ *
+ * Matches what YouTube's own player does. The interval is the point, not the value: reported
+ * watch time has to grow with real elapsed time or it is discarded — a single ping claiming a
+ * whole track was heard is accepted and counted as nothing.
+ */
+const SCROBBLE_TICK_MS = 30_000;
+
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
 export interface PlayerState {
@@ -178,6 +187,7 @@ export class PlayerController {
   private crossfadeSec = 0;
   private gaplessEnabled = true;
   private transitionTimerId: number | null = null;
+  private scrobbleTimerId: number | null = null;
   private transitioning = false;
 
   private state: PlayerState = {
@@ -336,6 +346,9 @@ export class PlayerController {
     playbackQueue?: readonly Track[],
     autoplayWhenQueueEnds = false,
   ): Promise<boolean> {
+    // Close out whatever was playing first: this is the funnel every track change goes
+    // through, so it catches a natural end and a skip with the same one call.
+    this.finishPlayReport();
     const requestId = ++this.playTrackRequestId;
     logInternalInfo("PlayerController.playTrackById start", { videoId });
     /*
@@ -1132,6 +1145,7 @@ export class PlayerController {
       // Start on the next one immediately rather than near the end of this track: a skip lands
       // whenever the listener decides it does, not only in the last few seconds.
       this.warmNextTrack();
+      this.beginPlayReport(track);
     } catch (error) {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
@@ -1157,6 +1171,7 @@ export class PlayerController {
     });
     this.state = { ...this.state, ...partial };
     this.syncTransitionTicker();
+    this.syncScrobbleTicker();
     this.emit();
   }
 
@@ -1248,6 +1263,44 @@ export class PlayerController {
     return track.source !== "local"
       && !isTrackDownloaded(track.id)
       && !this.audioEngine.usesNativeAudio();
+  }
+
+  /**
+   * Starts reporting a play, when the provider and the engine both allow it.
+   *
+   * Gated on native playback because the IFrame embed reports its own plays — pinging as well
+   * would count every track twice. Local files have no provider history to report to.
+   */
+  private beginPlayReport(track: Track): void {
+    if (!this.audioEngine.usesNativeAudio() || track.source === "local") return;
+    void this.dataSource.beginPlayReport?.(track);
+  }
+
+  /** Reports the final position of the outgoing play, if one is open. */
+  private finishPlayReport(): void {
+    const track = this.state.currentTrack;
+    if (!track) return;
+    void this.dataSource.updatePlayReport?.(track, this.audioEngine.getCurrentTime(), true);
+  }
+
+  private syncScrobbleTicker(): void {
+    const wanted = this.state.status === "playing"
+      && this.isTabActive
+      && this.audioEngine.usesNativeAudio();
+
+    if (wanted === (this.scrobbleTimerId !== null)) return;
+
+    if (!wanted) {
+      if (this.scrobbleTimerId !== null) globalThis.clearInterval(this.scrobbleTimerId);
+      this.scrobbleTimerId = null;
+      return;
+    }
+
+    this.scrobbleTimerId = globalThis.setInterval(() => {
+      const track = this.state.currentTrack;
+      if (!track || this.state.status !== "playing") return;
+      void this.dataSource.updatePlayReport?.(track, this.audioEngine.getCurrentTime(), false);
+    }, SCROBBLE_TICK_MS);
   }
 
   private syncTransitionTicker(): void {

@@ -132,6 +132,12 @@ import {
   type SidebarMode,
 } from "../settings/sidebarMode";
 import {
+  setAuthenticatedStreaming,
+  setYouTubeScrobbling,
+  useAuthenticatedStreaming,
+  useYouTubeScrobbling,
+} from "../settings/youtubeAccount";
+import {
   AUDIO_ENGINE_MODES,
   setAudioEngineMode,
   useAudioEngineMode,
@@ -432,6 +438,8 @@ export function SettingsPage({
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
   const audioEngineMode = useAudioEngineMode();
+  const authenticatedStreaming = useAuthenticatedStreaming();
+  const youtubeScrobbling = useYouTubeScrobbling();
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
   const lyricsTranslationLang = useLyricsTranslationLang();
@@ -1729,8 +1737,8 @@ export function SettingsPage({
               title="Playback method"
               description={
                 audioEngineMode === "native"
-                  ? "Zuno resolves and downloads each track itself, then plays it locally. No hidden YouTube frame, so the app uses roughly 90 MB less. Tracks take a moment longer to start, and gapless and crossfade below do not apply."
-                  : "A hidden YouTube player streams each track. Slightly heavier, but it starts faster and is the only engine that can do gapless and crossfade. Come back here if native playback fails to start a song."
+                  ? "Zuno plays each track itself. About 90 MB lighter, slower to start, no gapless or crossfade."
+                  : "A hidden YouTube frame plays each track. Costs about 90 MB, starts faster, required for gapless and crossfade."
               }
             >
               {() => (
@@ -1754,9 +1762,22 @@ export function SettingsPage({
             </SettingRow>
 
             <p className="px-1 text-xs text-muted-foreground">
-              Takes effect on the next track — whatever is playing now finishes on the engine
-              that started it, and only frees the hidden YouTube frame once it does.
+              Applies from the next track.
             </p>
+
+            <SettingToggle
+              title="Resolve streams as your account"
+              description="Attaches your session when resolving a track — required for Premium bitrates. Downloads always resolve anonymously."
+              checked={authenticatedStreaming}
+              onCheckedChange={setAuthenticatedStreaming}
+            />
+
+            <SettingToggle
+              title="Add plays to YouTube Music history"
+              description="Reports plays to YouTube, feeding its recommendations. Also enables the setting above. The YouTube frame always reports its own."
+              checked={youtubeScrobbling}
+              onCheckedChange={setYouTubeScrobbling}
+            />
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="playback-settings-title">

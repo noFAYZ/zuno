@@ -54,10 +54,15 @@ import { getPreferredLyricsSourceId } from "../../internal/lyricsSourcePreferenc
 import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
 import {
+  getDownloadQuality,
   getStreamingQuality,
   selectFormatForQuality,
   type AudioQuality,
 } from "../../internal/audioQuality";
+import {
+  usesAuthenticatedStreaming,
+  usesYouTubeScrobbling,
+} from "../../ui/settings/youtubeAccount";
 import {
   getLiveCookie,
   notifyAuthRejected,
@@ -320,6 +325,19 @@ const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist
  */
 const LIBRARY_CACHE_KEY = "youtube-music:library:v9";
 /** The account the user picked by hand, which outranks the automatic probe. */
+/**
+ * Content playback nonce — 16 characters from the alphabet YouTube's own player draws on.
+ *
+ * One per play. It is what ties the "a play started" ping to the watchtime pings that follow;
+ * reusing one across tracks would report them as the same play.
+ */
+function createPlaybackNonce(): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte & 63]).join("");
+}
+
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 // v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
 // channel avatar — so anything cached under the older shape-and-crop rules has to go.
@@ -350,6 +368,14 @@ export class YouTubeMusicDataSource extends DataSource {
 
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
+  /** The play currently being reported to YouTube history, or null when none is. */
+  private playReport: {
+    trackId: string;
+    cpn: string;
+    playbackUrl: string;
+    watchtimeUrl: string;
+    startedAt: number;
+  } | null = null;
   private musicSerializedDelegationContext: string | null = null;
   private musicAccountName = "YouTube Music";
   private musicAccountArtworkUrl: string | null = null;
@@ -5249,21 +5275,20 @@ export class YouTubeMusicDataSource extends DataSource {
    * client walk and format ranking — a download that picked a different format from playback
    * would produce offline copies that sound different from the stream they replace.
    */
-  async resolveStreamUrl(
+  private async resolveStream(
     track: Track,
-    quality: AudioQuality = getStreamingQuality(),
+    quality: AudioQuality,
+    clientOrder: readonly ClientLabel[],
   ): Promise<{ url: string; mimeType: string; cookie?: string }> {
     let streamUrl: string | null = null;
     let streamMimeType = "audio/mp4";
 
     /*
-     * Ungated clients first, unlike playback's music-then-web walk. This is the byte-fetching
-     * path: its URL is handed to Rust and pulled over plain HTTP, and a web URL cannot serve
-     * more than its first 1 MiB. Music and web remain as fallbacks for tracks the others cannot
-     * see, which is real for Music-exclusive content — a 1 MiB-capped URL is still better than
-     * no URL, and the length check downstream will reject the truncated result honestly.
+     * The walk itself holds no policy — the order is handed in. Whichever client comes first is
+     * tried first and the rest are fallbacks for tracks it cannot see, which is real for
+     * Music-exclusive content.
      */
-    for (const label of ["download", "music", "web"] as ClientLabel[]) {
+    for (const label of clientOrder) {
       try {
         const yt = await this.getClient(label);
         // Only the download client is attested; music and web are fallbacks whose URLs are
@@ -5344,7 +5369,7 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     if (!streamUrl) {
-      throw new Error("Unable to resolve a Linux-compatible MP4 audio stream.");
+      throw new Error("Unable to resolve a playable audio stream.");
     }
 
     return {
@@ -5352,6 +5377,146 @@ export class YouTubeMusicDataSource extends DataSource {
       mimeType: streamMimeType,
       cookie: this.musicCookie ?? undefined,
     };
+  }
+
+  /**
+   * Resolves a URL for *playback*.
+   *
+   * The only place the authenticated-streaming preference is read. On, the signed-in music
+   * client goes first — the one a Premium entitlement could be read from, and the one proven to
+   * serve whole files without a PO token. Off keeps the anonymous attested client in front,
+   * which is the long-standing behaviour.
+   */
+  async resolveStreamUrl(
+    track: Track,
+    quality: AudioQuality = getStreamingQuality(),
+  ): Promise<{ url: string; mimeType: string; cookie?: string }> {
+    const order: ClientLabel[] = usesAuthenticatedStreaming()
+      ? ["music", "download", "web"]
+      : ["download", "music", "web"];
+    return this.resolveStream(track, quality, order);
+  }
+
+  /**
+   * Resolves a URL for the *offline download queue*.
+   *
+   * Deliberately a separate method rather than a flag on the one above: this body does not
+   * reference the streaming preference at all, so downloads cannot inherit it by a mis-edited
+   * condition. The anonymous attested client stays in front because that is the path proven to
+   * survive being pulled from Rust and written to disk.
+   */
+  async resolveDownloadUrl(
+    track: Track,
+    quality: AudioQuality = getDownloadQuality(),
+  ): Promise<{ url: string; mimeType: string; cookie?: string }> {
+    return this.resolveStream(track, quality, ["download", "music", "web"]);
+  }
+
+  /**
+   * Reports the start of a play to YouTube Music's own history.
+   *
+   * Two pings make a play count, and both matter. This one says "a play began"; the watchtime
+   * pings from `updatePlayReport` say how long it actually ran. A playback ping on its own is
+   * accepted and recorded as nothing.
+   *
+   * The tracking URLs are not exposed by youtubei.js — `playback_tracking` is a private field
+   * with no getter — so the raw `/player` response is fetched through the authenticated music
+   * client rather than reconstructed.
+   *
+   * Best effort throughout: a failure here must never interrupt playback, so nothing rethrows.
+   */
+  async beginPlayReport(track: Track): Promise<void> {
+    this.playReport = null;
+    if (!usesYouTubeScrobbling() || track.source !== "youtube" || !this.musicCookie) return;
+
+    try {
+      const yt = await this.getMusicClient();
+      const raw = await yt.actions.execute("/player", { videoId: track.id, parse: false });
+      const tracking = (raw as any)?.data?.playbackTracking ?? (raw as any)?.playbackTracking;
+      const playbackUrl = tracking?.videostatsPlaybackUrl?.baseUrl;
+      const watchtimeUrl = tracking?.videostatsWatchtimeUrl?.baseUrl;
+      if (!playbackUrl || !watchtimeUrl) {
+        logInternalWarn("YouTubeMusicDataSource.beginPlayReport no tracking urls", {
+          trackId: track.id,
+        });
+        return;
+      }
+
+      const cpn = createPlaybackNonce();
+      this.playReport = { trackId: track.id, cpn, playbackUrl, watchtimeUrl, startedAt: Date.now() };
+      await this.pingPlaybackStats(playbackUrl, { cpn, rtn: "0" });
+      logInternalInfo("YouTubeMusicDataSource.beginPlayReport started", { trackId: track.id });
+    } catch (error) {
+      this.playReport = null;
+      logInternalWarn("YouTubeMusicDataSource.beginPlayReport failed", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Reports how far the current play has actually got.
+   *
+   * `et` is clamped to real elapsed wall time, never to the position alone. Reporting a whole
+   * track's worth of listening seconds after the play began is silently ignored — that is what
+   * made the first working experiment differ from the two that returned 204 and did nothing.
+   */
+  async updatePlayReport(track: Track, positionSec: number, final: boolean): Promise<void> {
+    const report = this.playReport;
+    if (!report || report.trackId !== track.id) return;
+    if (final) this.playReport = null;
+
+    const wallElapsed = Math.floor((Date.now() - report.startedAt) / 1000);
+    const watched = Math.max(0, Math.min(Math.floor(positionSec), wallElapsed));
+    if (watched <= 0) return;
+
+    try {
+      await this.pingPlaybackStats(report.watchtimeUrl, {
+        cpn: report.cpn,
+        st: "0",
+        et: String(watched),
+        cmt: String(watched),
+        state: final ? "paused" : "playing",
+        ...(final ? { final: "1" } : {}),
+      });
+      logInternalDebug("YouTubeMusicDataSource.updatePlayReport", {
+        trackId: track.id,
+        watched,
+        final,
+      });
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.updatePlayReport failed", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Shared query shape for both stats endpoints. tauriFetch signs `/api/stats/` for us. */
+  private async pingPlaybackStats(
+    baseUrl: string,
+    params: Record<string, string>,
+  ): Promise<void> {
+    // Taken from the live session so a client-version bump does not leave the pings claiming
+    // to be a build that no longer exists.
+    const client = await this.getMusicClient();
+    const clientVersion = client.session.context.client.clientVersion;
+    const query = new URLSearchParams({
+      ver: "2",
+      fmt: "251",
+      rt: "0",
+      c: "WEB_REMIX",
+      cver: clientVersion,
+      ...params,
+    });
+    const url = `${baseUrl}${baseUrl.includes("?") ? "&" : "?"}${query}`;
+    await tauriFetch(url, {
+      headers: {
+        cookie: this.musicCookie ?? "",
+        "x-youtube-client-name": "67",
+      },
+    });
   }
 
   /**

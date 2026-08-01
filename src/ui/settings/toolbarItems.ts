@@ -12,13 +12,14 @@ import {
  * Hiding the Discord or Last.fm button does not turn the integration off; that stays where it
  * was, in its own setting, so a hidden button can never silently stop scrobbling.
  */
-export type ToolbarItem = "notifications" | "downloads" | "discord" | "lastfm" | "github";
+export type ToolbarItem = "notifications" | "downloads" | "discord" | "lastfm" | "ytmusic" | "github";
 
 const STORAGE_KEYS: Record<ToolbarItem, string> = {
   notifications: "toolbar-notifications-visible",
   downloads: "toolbar-downloads-visible",
   discord: "toolbar-discord-visible",
   lastfm: "toolbar-lastfm-visible",
+  ytmusic: "toolbar-ytmusic-visible",
   github: "toolbar-github-visible",
 };
 
@@ -47,6 +48,11 @@ export const TOOLBAR_ITEMS: Array<{
     id: "lastfm",
     label: "Last.fm scrobbling",
     description: "Shortcut for scrobbling. Hiding it leaves it as it is.",
+  },
+  {
+    id: "ytmusic",
+    label: "YouTube Music history",
+    description: "Shortcut for reporting plays to YouTube. Hiding it leaves it as it is.",
   },
   {
     id: "github",

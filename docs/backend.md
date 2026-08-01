@@ -10,7 +10,7 @@ See [architecture.md](./architecture.md) for the system view.
 | File | Lines | Responsibility |
 |---|---|---|
 | `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
-| `lib.rs` | ~3870 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
+| `lib.rs` | ~3940 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -188,7 +188,7 @@ Why: the WebView can't set `Cookie`/`Origin` headers or bypass CORS, and Innertu
 | Command | Signature | Notes |
 |---|---|---|
 | `fetch_audio_bytes` | `(url, trackId) -> Vec<u8>` | Downloads with YouTube-ish headers (Range, Origin, Referer, Sec-Fetch-*), same signed-IP handling |
-| `fetch_audio_source` | `(url, trackId, mimeType, cookie?) -> { url, mimeType, byteLength }` | Downloads, validates the MP4 `ftyp` box at offset 4, publishes the bytes under `stream-<trackId>`, returns a `http://127.0.0.1:<port>/audio/<key>` URL |
+| `fetch_audio_source` | `(url, trackId, mimeType, cookie?) -> { url, mimeType, byteLength }` | Downloads via `fetch_audio_ranged`, publishes the bytes under `stream-<trackId>`, returns a `http://127.0.0.1:<port>/audio/<key>` URL. The `ftyp` check runs only when `mimeType` is MP4 — Opus-in-WebM has no such box |
 | `fetch_youtube_music_audio` | `(videoId) -> { bodyBase64, mimeType }` | Direct InnerTube player API using web-remix / web / iOS / Android / TV contexts that return undeciphered URLs |
 
 **Media server**: a lazily started `TcpListener` on `127.0.0.1:0` with a thread per connection,
@@ -209,6 +209,15 @@ a request already in flight finishes against the bytes it started with.
 **Note:** which of these runs for ordinary streaming depends on the audio-engine setting. In
 `iframe` mode (the default) none of them do — the IFrame decks stream directly. Downloads always
 use `offline_audio_save` below.
+
+**`fetch_audio_ranged`** is the one downloader both playback and the offline store use, so the
+two cannot drift apart on speed — playback used to take the single-request path while downloads
+took the parallel one, and a skip paid the difference.
+
+- Ranges are sized by `audio_chunk_size(total)`: aim for roughly `OFFLINE_CHUNK_CONCURRENCY` (6) of them, floored at `AUDIO_MIN_CHUNK_BYTES` (512 KiB) and capped at `OFFLINE_CHUNK_BYTES` (4 MiB). A fixed 4 MiB was previously *both* the range size and the threshold, so a typical 2–4 MB song never split at all.
+- Below the floor, or with no `clen` to plan from, it falls back to one request.
+- One refused range aborts the assembly and restarts on the single-request path rather than returning a buffer with a hole in it.
+- `on_progress(received, total)` is caller-supplied; the offline store emits `offline-download-progress`, playback passes a no-op.
 
 ### Audio — offline downloads
 
@@ -345,6 +354,7 @@ release workflow under `.github/workflows/`.
 | `only_youtube_hosts_touch_the_cookie_jar` | `is_youtube_cookie_host` rejects `notyoutube.com` and googlevideo |
 | `audio_url_with_range_appends_without_disturbing_the_signature` | query present/absent, percent-encoding preserved |
 | `signed_content_length_reads_clen` | `clen` parsing |
+| `audio_chunk_size_splits_a_song_and_bounds_the_extremes` | a 2.5 MB song splits into several ranges; tiny files stay at the floor, huge ones at the cap |
 | `sanitize_log_url_*` | secrets withheld by value, diagnostics kept, unparseable input |
 | `cookie_domain_matches_*` | exact, parent-domain, and rejection cases |
 | `media_items_stay_capped_and_evict_the_coldest_first` | `store_media_item` holds the cap and drops the oldest, not an arbitrary entry |

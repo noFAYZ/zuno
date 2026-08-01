@@ -167,9 +167,17 @@ async function applyCookieAuth(
   headers: Record<string, string>,
   requestUrl: string,
 ): Promise<void> {
-  // InnerTube API calls only. Signing an ordinary page or media fetch would rewrite its
-  // Origin and Referer to a host it is not going to, which is worse than leaving it alone.
-  if (!headers.cookie || !new URL(requestUrl).pathname.startsWith("/youtubei/")) return;
+  /*
+   * InnerTube calls and the playback-stats pings only. Signing an ordinary page, player script
+   * or media fetch would rewrite its Origin and Referer to a host it is not going to, which is
+   * worse than leaving it alone.
+   *
+   * `/api/stats/` is here because a watchtime ping only counts against an account when it
+   * carries the session — an unsigned one is accepted with 204 and attributed to nobody.
+   */
+  const path = new URL(requestUrl).pathname;
+  const signable = path.startsWith("/youtubei/") || path.startsWith("/api/stats/");
+  if (!headers.cookie || !signable) return;
 
   const origin = headers["x-youtube-client-name"] === "67"
     ? "https://music.youtube.com"

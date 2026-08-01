@@ -22,12 +22,17 @@ export const searchController = new SearchController(dataSource);
  * the source is injected here where both are already in scope.
  */
 setOfflineStreamResolver((track, quality) => {
+  /*
+   * `resolveDownloadUrl`, never `resolveStreamUrl`. The two differ only in client order, but
+   * the download one never reads the authenticated-streaming preference — binding it here is
+   * what keeps that guarantee at the wiring site rather than inside a shared function.
+   */
   const resolver = (dataSource as {
-    resolveStreamUrl?: (
+    resolveDownloadUrl?: (
       t: typeof track,
       q: typeof quality,
     ) => Promise<{ url: string; mimeType: string; cookie?: string }>;
-  }).resolveStreamUrl;
+  }).resolveDownloadUrl;
   if (!resolver) throw new Error("Downloads are unavailable for this source.");
   return resolver.call(dataSource, track, quality);
 });
