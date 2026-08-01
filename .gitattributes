@@ -1,0 +1,19 @@
+# Git decides line endings, not whichever editor last saved the file.
+#
+# Without this, editors rewrote whole files between CRLF and LF and the churn landed in
+# feature diffs — `App.tsx` once showed 4,388 changed lines of which 18 were real, which is
+# enough noise to hide a bug from a reviewer.
+#
+# LF in the repository for everything text; the working tree is left alone, since every tool
+# here reads both.
+* text=auto eol=lf
+
+# Binary, so never touched.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.webp binary
+*.mp3 binary
+*.mp4 binary
+*.woff2 binary
