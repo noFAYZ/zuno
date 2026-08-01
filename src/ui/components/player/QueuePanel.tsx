@@ -549,7 +549,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
     >
       <header
         className={cn(
-          "sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-card backdrop-blur",
+          "sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-card",
           collapsed ? "flex-col px-2 py-2" : "px-3 py-2.5",
         )}
       >

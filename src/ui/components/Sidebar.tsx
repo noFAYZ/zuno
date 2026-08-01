@@ -1078,7 +1078,7 @@ export function Sidebar({
   return (
     <div
       ref={sidebarRef}
-      className="relative flex min-h-0 shrink-0 flex-col bg-background backdrop-blur transition-[width] duration-200 ease-out"
+      className="relative flex min-h-0 shrink-0 flex-col bg-background transition-[width] duration-200 ease-out"
       style={{ width: `${effectiveWidth}px` }}
       onPointerEnter={(event) => {
         // Pointer only. A drag passing over the rail is not a request to expand it, and a

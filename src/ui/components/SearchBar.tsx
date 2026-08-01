@@ -54,7 +54,7 @@ export function SearchBar({
         type="button"
         onClick={onOpen}
         data-onboarding="search"
-        className="group flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-full bg-card px-3.5 text-left text-sm text-muted-foreground backdrop-blur transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        className="group flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-full bg-card px-3.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <SearchIcon size={17} className="shrink-0" />
         <span className="truncate">Search artists, songs, playlists, and albums</span>

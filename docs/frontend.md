@@ -17,7 +17,7 @@ Runs before React mounts, in this order:
 3. `applyTheme()` + `watchSystemTheme()` — sets `data-theme`; `system` keeps following the OS rather than resolving once.
 4. `applyPaperPcMode()` / `applyNativeWindowControls()` — synchronous theme + decoration flags from localStorage.
 5. `hydrateMainWindowGeometry()` → `restoreMainWindowGeometry()`.
-6. `Promise.all` of ~17 `hydrate*` functions (paperPc, theme, windowControls, miniPlayer, playerControls, queuePanel, tray, audioQuality, lastFm, discord, sidebar, keyboardShortcuts, toolbarItems, homeSections, playbackSettings, playHistory, sessionRestore) — these reconcile localStorage against Rust-owned durable settings.
+6. `Promise.all` of ~18 `hydrate*` functions (paperPc, theme, windowControls, miniPlayer, playerControls, queuePanel, tray, audioQuality, audioEngineMode, lastFm, discord, sidebar, keyboardShortcuts, toolbarItems, homeSections, playbackSettings, playHistory, sessionRestore) — these reconcile localStorage against Rust-owned durable settings.
 7. `DiscordRpcService.init()`.
 8. `window.error` + `window.unhandledrejection` → `logInternalError`.
 9. `createRoot().render(<StrictMode><ErrorBoundary label="Zuno"><App/></ErrorBoundary></StrictMode>)` — the outermost boundary exists because a desktop shell has no address bar to reload a blank window from.
@@ -32,7 +32,7 @@ controllers — all state arrives over Tauri events from the main window.
 
 ## 2. `App.tsx` — the root
 
-2161 lines, the only component with meaningful state. It owns:
+2150 lines, the only component with meaningful state. It owns:
 
 | Concern | State / refs |
 |---|---|
@@ -42,8 +42,16 @@ controllers — all state arrives over Tauri events from the main window.
 | Onboarding | `onboardingStep`, keychain notice, completion toast |
 | Updates | `availableUpdate`, snooze handling, release note dialog |
 | Loading screen | `loadingScreenState`, min 1000 ms / max 4000 ms, 80 ms fade |
-| Mini player | positioning, focus-driven show/hide, suppression windows during drags |
+| Mini player | positioning, focus-driven create/destroy, suppression windows during drags |
 | Recovery | sleep detection (15 s timer, 60 s drift threshold) → reload; connection recovery on window focus |
+| Session persistence | an effect on `[tabs, activeTabId, nextTabId, playerSession]`, `beforeunload`, and a `SESSION_HEARTBEAT_MS` (5 s) heartbeat |
+
+**On that heartbeat:** the effect and `beforeunload` are the real persistence path; the timer only
+keeps `positionSec` fresh for a restore after a crash or a kill. It ran every second, rebuilding
+every tab's full queue and history into a multi-megabyte object graph, stringifying it and writing
+it synchronously — for a field that only has to be roughly right. At five seconds a hard kill costs
+at most five seconds of position, and `saveAppSession` skips the write outright when the payload is
+unchanged.
 
 Every page below it is `lazy`-loaded behind `Suspense`. Only Home is reachable at startup; the
 chunks come off local disk in a Tauri app, so the win is startup parse/compile time rather than
@@ -131,7 +139,7 @@ Tailwind classes inline; there are no `*.module.css` files.
 | Component | Purpose |
 |---|---|
 | `SearchOverlay.tsx` | ⌘/Ctrl+K palette. Fuzzy-scores your playlists/albums locally (`searchMatchScore`: exact 4 → prefix 3 → contains 2 → reverse-contains 1, with NFKD-normalized fallbacks), fetches remote suggestions, keeps recent searches, and recognises a pasted YouTube link (`looksLikeYouTubeLink`) to resolve rather than search. Shift-Enter opens results in a new tab. |
-| `TrackRow.tsx` | The one row used by every track list. `memo`'d with `propsEqual`, which ignores handler identity — comparing inline arrows with `Object.is` meant the memo never returned true and did nothing at all, rebuilding 500 rows to repaint two. Handlers are invoked through a ref refreshed each render, which is what makes that safe. |
+| `TrackRow.tsx` | The one row used by every track list. `memo`'d with `propsEqual`, which ignores handler identity — comparing inline arrows with `Object.is` meant the memo never returned true and did nothing at all, rebuilding 500 rows to repaint two. Handlers are invoked through a ref refreshed each render, which is what makes that safe. Also carries `content-visibility: auto` with `contain-intrinsic-size: auto 52px`, so off-screen rows skip layout, paint and compositing — see §8. |
 | `TrackContextMenu.tsx` | React context provider + menu: like/dislike, play next, add to queue, add to playlist (with submenu and pending state), remove from playlist, download/remove download, edit tags (local files), copy link, search artist, go to related. Viewport-edge flipping via `useLayoutEffect`. |
 | `PlaylistContextMenu.tsx` | Same pattern for playlists/albums: play, save/unsave, rename/describe/delete, local-playlist management, import/export, download all, remove. |
 | `SelectionBar.tsx` | Bulk actions for a multi-selection, floating above the player bar so it doesn't push the list around as it appears. |
@@ -173,7 +181,7 @@ Tailwind classes inline; there are no `*.module.css` files.
 
 A transparent always-on-top pill in its own window (~1.1k lines).
 
-- Appears on `main-window-backgrounded` / `main-window-minimized`, hides on `window-focused`.
+- Created on `main-window-backgrounded` / `main-window-minimized`, **destroyed** on `window-focused`. Its own close button calls `win.destroy()` for the same reason. `handleRestore` raises the main window without awaiting its own `hide()`: the main window answers `mini-player:restore-main` by destroying this one, so an awaited self-call can reject after the window is gone and abort the restore.
 - Expands on hover into a two-pill layout with transport controls.
 - Right-mouse or empty-area drag moves the window; the position is debounced into settings and echoed as `mini-player:position-changed`.
 - Hover behaviour over the progress area is configurable: `seek` or `volume` (`mini-player-hover-action`).
@@ -185,7 +193,7 @@ A transparent always-on-top pill in its own window (~1.1k lines).
 
 | Page | Notes |
 |---|---|
-| `HomePage.tsx` | Recently played, `HomeDestinations`, a `CylinderCarousel` of picks, and generated suggestions memoized per tab in module-level `Map`s so switching tabs doesn't refetch. Falls back to canned queries when signed out. Sections are toggleable (`homeSections.ts`). |
+| `HomePage.tsx` | Recently played, `HomeDestinations`, a `CylinderCarousel` of picks, and generated suggestions memoized in a module-level `Map` (20 entries, LRU) keyed by tab *and* a signature of the recently-played list. The key is computed above the `useState` calls so the initial render can read it — seeding from `tabId` alone meant the memo never hit and Home opened on a spinner every time. Falls back to canned queries when signed out. Sections are toggleable (`homeSections.ts`). |
 | `LibraryPage.tsx` | The whole saved library in one view — playlists, albums, artists, songs. |
 | `BrowsePage.tsx` | The non-search surfaces through `getBrowsePage` — `explore` / `charts` / `moods` / `podcasts`, plus the local `downloads` list. Which one opens is carried on `Tab.browseTab`. |
 | `HistoryPage.tsx` | Local play log from `player/playHistory.ts`, with per-entry removal and clear-all. |
@@ -195,7 +203,7 @@ A transparent always-on-top pill in its own window (~1.1k lines).
 | `RelatedPage.tsx` | `getRelated` shelves for a single track. |
 | `SearchResultsPage.tsx` | Mixed results grouped by artists / tracks / albums / playlists, painted incrementally from streaming `onUpdate` callbacks, with per-category drill-down. |
 | `LyricsView.tsx` | Overlay. Synced lyrics scroll to the active line; per-track timing offset, font scale, translation, and a source-attempt trail. Whether a karaoke highlight runs is decided by `lyricsTiming.ts` from the lines themselves, not from the provider's `timing` field — one line without a start time makes the highlight jump backwards. |
-| `SettingsPage.tsx` | Six tabs: **Account** (sign-in, accounts, Last.fm, Discord, updates, delete all data), **Appearance** (theme light/dark/system, Paper-PC mode, made-for-you sections), **Playback** (streaming/download quality, gapless, crossfade, transitions, lyrics translation/size/source), **Library** (cache size and clearing, local music folders via `dialog:open` → `local_audio_scan`, downloads ceiling), **Window** (decorations, control style, mini player, sidebar mode, tray, geometry, session restore, autostart), **Shortcuts** (rebinding). |
+| `SettingsPage.tsx` | Six tabs: **Account** (sign-in, accounts, Last.fm, Discord, updates, delete all data), **Appearance** (theme light/dark/system, Paper-PC mode, made-for-you sections), **Playback** (audio engine, streaming/download quality, gapless, crossfade, transitions, lyrics translation/size/source), **Library** (cache size and clearing, local music folders via `dialog:open` → `local_audio_scan`, downloads ceiling), **Window** (decorations, control style, mini player, sidebar mode, tray, geometry, session restore, autostart), **Shortcuts** (rebinding). |
 | `collectTrackPages.ts` | Pages a track list to the end. Extracted from the views because the loop's *termination* is what fails quietly — a cursor that stops advancing spins forever (`collectTrackPages.check.ts`). |
 | `pageSearchKeyboard.ts` | `shouldStartPageSearch()` — see §2. |
 
@@ -212,7 +220,8 @@ and `storage` (for cross-window sync). Writes go to localStorage **and** durable
 |---|---|
 | `theme.ts` | `system` / `light` / `dark`, written as `data-theme` before React mounts. `system` keeps following the OS via a `matchMedia` listener rather than resolving once at startup. |
 | `keyboardShortcuts.ts` | Remappable map for 19 actions, with `eventMatchesShortcut` and platform-aware modifier labels (⌘ vs Ctrl). |
-| `miniPlayer.ts` | Enabled flag, saved position (debounced), hover action, `resetMiniPlayerPosition()`, window create/destroy. |
+| `miniPlayer.ts` | Enabled flag, saved position (debounced), hover action, `resetMiniPlayerPosition()`. Owns the window's whole lifecycle: `ensureMiniPlayerWindow()` / `destroyMiniPlayerWindow()` run through one serialized promise chain so a blur/focus pair can't interleave into an orphaned or prematurely-destroyed window. |
+| `audioEngine.ts` | `iframe` (default) vs `native` playback. The value is cached in-module because `AudioEngine` reads it on every load, play, pause, seek and volume change — a raw localStorage hit would sit in the playback path. Exports `AUDIO_ENGINE_MODE_CHANGE_EVENT` so the engine can free its IFrame decks the moment the mode stops being `iframe`. |
 | `mainWindowGeometry.ts` | Size + position persistence with a min-size guard (900×600) and monitor-bounds validation; toggleable, and clears the stored value when disabled. |
 | `windowControls.ts` | `native-window-controls` (default on for Linux) and `windows-style-window-controls`; applies `setDecorations()` and toggles `data-native-window-controls`. |
 | `paperPcMode.ts` | Low-end mode: kills animations, transitions, shadows, and backdrop filters via `data-paper-pc`. Reloads on Linux where blur can't be toggled live. |
@@ -272,6 +281,16 @@ scan (the reference dumps in there are full of class names the app never uses).
 - The palette is **neutral shadcn surfaces + the app's `#ff0033` as `--color-primary`**. Red is an
   accent only — `bg-primary` / `text-primary` for play state, active tabs and primary actions,
   never for large surfaces. It stays `#ff0033` in both themes: it's the brand accent, not a surface.
+- **Never put `backdrop-blur` on an opaque background.** `--color-background`, `--color-card` and
+  `--color-popover` have no alpha in either theme, so a backdrop filter behind them costs a
+  composited layer and a blur pass to render something nothing can see through. Seven always-on
+  surfaces carried one — the content pane, title bar, sidebar, player bar, search field, right
+  panel and queue header — and removing them changed nothing visually. Blur belongs only on a
+  translucent fill (`bg-card/60`, `bg-background/70`).
+- **Blur radius sizes the compositor's intermediate textures**, so the two always-on filters are
+  kept modest: the ambient wash at `blur-[32px]` (its source is a 120px image stretched to full
+  width — a ~20x upscale is already most of the softness) and StarField's blobs at `blur-2xl`
+  (they are `rounded-full` gradients fading to transparent, so the fill does the work).
 - The UI is **borderless** — surfaces are separated by background contrast, not outlines.
   `--color-border` / `--color-input` exist only because beUI internals reference them.
 - Non-colour `:root` constants: `--ambient-bloom` (strength of the accent wash behind the window,
@@ -329,6 +348,8 @@ saved, selected). The weight change *is* the state signal. Solar ships no brand 
 - **Two-tier settings**: never write only to localStorage; use the `durableLocalSetting` helpers so the value survives a WebView data reset.
 - **Prefer `usePlayerSelector` over `usePlayerState`**, and subscribe at the leaf that needs the value — `VolumeSyncBridge` exists solely because subscribing to volume at the root re-rendered the tree on every pointer move.
 - **`memo` with `propsEqual`, not the default**, for row components handed inline arrows — and route the handlers through a ref so it stays correct.
+- **The track lists are not windowed, deliberately.** `PlaylistView`, `AlbumView`, `SearchResultsPage`, `HistoryPage` and `QueuePanel` all map the full array; the `IntersectionObserver` in `PlaylistView` is infinite-scroll paging, not virtualization. Windowing fights two features that need the whole index space — drag-reorder (the dragged row must survive scrolling out of range) and `useTrackSelection`'s shift-range. `content-visibility: auto` on `TrackRow` buys most of the rendering win for one line instead: the nodes stay, the work does not. Use `contain-intrinsic-size` with the `auto` keyword so the browser prefers the height it last measured and the literal only covers rows never yet on screen.
+- **Bound every module-level cache.** `artworkCache` (16 MB of blobs, 500 entries), `HomePage`'s `suggestionCache` (20 entries), `playHistory` (500), `playlistMembership` (1000) all evict oldest-first. A `Map` keyed by anything that varies with use — a tab id, a search key, a recently-played signature — grows for as long as the app is open.
 - **Log through `internal/logging.ts`**, never raw `console.*` — it redacts secrets and mirrors to the on-disk log.
 - **Non-trivial pure logic gets a `*.check.ts`** next to it, run by `npm run check`. That is the whole frontend test story; there is no component harness.
 - **Optimistic mutations roll back**: `LibraryController` snapshots the previous library, applies the change, and restores on error. Match that pattern for new mutations.

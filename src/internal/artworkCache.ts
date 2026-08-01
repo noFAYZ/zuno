@@ -28,7 +28,7 @@ const MAX_ENTRIES = 500;
  * nothing, and blobs, which cost whatever the image weighs. Five hundred thumbnails and five
  * hundred full-size covers are the same number and two orders of magnitude apart in bytes.
  */
-const MAX_BLOB_BYTES = 32 * 1024 * 1024;
+const MAX_BLOB_BYTES = 16 * 1024 * 1024;
 const MAX_PERSISTED_ENTRIES = 300;
 const STORAGE_KEY = "zuno:artwork-resolved-v1";
 

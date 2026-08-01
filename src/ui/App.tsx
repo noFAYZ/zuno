@@ -133,6 +133,8 @@ const MINI_PLAYER_BOTTOM_MARGIN = 24;
 // A long fixed timeout used to swallow the mini player when the window was moved
 // and then minimised shortly after.
 const MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS = 1500;
+/** How often the session is written purely to keep the restored playback position fresh. */
+const SESSION_HEARTBEAT_MS = 5000;
 const SLEEP_RECOVERY_TIMER_INTERVAL_MS = 15000;
 const SLEEP_RECOVERY_TIMER_DRIFT_MS = 60000;
 const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
@@ -728,8 +730,19 @@ export default function App() {
     };
   }, [dismissLoadingScreen, libraryState.library, libraryState.status, showKeychainNotice]);
 
+  /*
+   * A heartbeat, not the primary persistence path.
+   *
+   * Every change to the tabs or the player session is already written by the effect below, and
+   * `beforeunload` catches a clean exit. All this adds is `positionSec` freshness for a restore
+   * after a crash or a kill — so it ran every second, rebuilding every tab's full queue and
+   * history into a multi-megabyte object graph, stringifying it and writing it synchronously,
+   * for a field that only has to be roughly right.
+   *
+   * At five seconds a hard kill costs at most five seconds of playback position.
+   */
   useEffect(() => {
-    const intervalId = window.setInterval(persistAppSession, 1000);
+    const intervalId = window.setInterval(persistAppSession, SESSION_HEARTBEAT_MS);
     window.addEventListener("beforeunload", persistAppSession);
     return () => {
       window.clearInterval(intervalId);

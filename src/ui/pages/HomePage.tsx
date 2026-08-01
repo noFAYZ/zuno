@@ -52,6 +52,35 @@ const suggestionCache = new Map<string, Track[]>();
 const suggestionLoads = new Map<string, Promise<Track[]>>();
 const EMPTY_TRACKS: Track[] = [];
 
+/**
+ * Cap on memoized suggestion sets.
+ *
+ * The key carries both the tab and a signature of the recently-played list, so a new entry
+ * appears for every tab and again on every library refresh — and each holds 36 full tracks.
+ * Unbounded, that grew for as long as the app stayed open.
+ *
+ * Insertion order gives LRU for free: reads re-insert, so eviction takes the coldest.
+ */
+const MAX_SUGGESTION_ENTRIES = 20;
+
+function readSuggestionCache(key: string): Track[] | undefined {
+  const hit = suggestionCache.get(key);
+  if (hit === undefined) return undefined;
+  suggestionCache.delete(key);
+  suggestionCache.set(key, hit);
+  return hit;
+}
+
+function writeSuggestionCache(key: string, tracks: Track[]): void {
+  suggestionCache.delete(key);
+  suggestionCache.set(key, tracks);
+
+  for (const coldest of [...suggestionCache.keys()]) {
+    if (suggestionCache.size <= MAX_SUGGESTION_ENTRIES) break;
+    suggestionCache.delete(coldest);
+  }
+}
+
 interface HomePageProps {
   tabId: string;
   playerController: PlayerControllerActions;
@@ -86,19 +115,28 @@ export function HomePage({
 }: HomePageProps) {
   const { openTrackMenu } = useTrackContextMenu();
   const showMadeForYou = useMadeForYouVisible();
-  const [suggestions, setSuggestions] = useState<Track[]>(
-    () => suggestionCache.get(tabId) ?? [],
-  );
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(
-    () => !suggestionCache.has(tabId),
-  );
-  const [isSurpriseSpinning, setIsSurpriseSpinning] = useState(false);
-  const loadIdRef = useRef(0);
   const recentlyPlayed = useMemo(
     () => libraryState.library?.recentlyPlayed ?? EMPTY_TRACKS,
     [libraryState.library],
   );
   const recentTrackKey = recentlyPlayed.map((track) => track.id).join(":");
+  /*
+   * Computed before the state below, not after, so the initial render can read the cache under
+   * the key writes actually use. It previously seeded from `tabId` alone — a key nothing ever
+   * stored — so the memo never hit and Home opened on a spinner every single time, which is
+   * the exact thing this cache exists to prevent.
+   */
+  const suggestionCacheKey = recentlyPlayed.length > 0
+    ? `${tabId}:recent:${recentTrackKey}`
+    : `${tabId}:${libraryState.status}:empty`;
+  const [suggestions, setSuggestions] = useState<Track[]>(
+    () => readSuggestionCache(suggestionCacheKey) ?? [],
+  );
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(
+    () => !suggestionCache.has(suggestionCacheKey),
+  );
+  const [isSurpriseSpinning, setIsSurpriseSpinning] = useState(false);
+  const loadIdRef = useRef(0);
   /*
    * What is shown as "Recently played": this session's plays first, then YouTube's history.
    * The library snapshot only refreshes on start-up, so on its own the row sat unchanged
@@ -116,9 +154,6 @@ export function HomePage({
       || libraryState.status === "loading"
       || libraryState.status === "authorizing"
     );
-  const suggestionCacheKey = recentlyPlayed.length > 0
-    ? `${tabId}:recent:${recentTrackKey}`
-    : `${tabId}:${libraryState.status}:empty`;
 
   useEffect(() => {
     if (isWaitingForLibrary) {
@@ -128,7 +163,7 @@ export function HomePage({
       return;
     }
 
-    const cached = suggestionCache.get(suggestionCacheKey);
+    const cached = readSuggestionCache(suggestionCacheKey);
     if (cached) {
       setSuggestions(cached);
       setIsLoadingSuggestions(false);
@@ -168,7 +203,7 @@ export function HomePage({
     }
 
     void loadPromise.then((loadedSuggestions) => {
-      suggestionCache.set(suggestionCacheKey, loadedSuggestions);
+      writeSuggestionCache(suggestionCacheKey, loadedSuggestions);
       suggestionLoads.delete(suggestionCacheKey);
       if (loadId !== loadIdRef.current) return;
       setSuggestions(loadedSuggestions);

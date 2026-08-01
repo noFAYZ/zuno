@@ -9,6 +9,11 @@
  * Kept deliberately low-contrast: this sits behind real UI, so it must never compete with
  * text or controls. Callers gate it on Paper-PC mode (see Layout.tsx), which is also why
  * this is plain CSS — no WebGL, no animation, nothing to disable.
+ *
+ * The blobs are blurred at `2xl` (40px) rather than `3xl` (64px). Both are always on screen,
+ * and blur radius is what sizes the compositor's intermediate textures — but the shapes here
+ * are already `rounded-full` gradients fading to transparent, so most of the softness comes
+ * from the fill rather than from the filter.
  */
 export function StarField() {
   return (
@@ -23,9 +28,9 @@ export function StarField() {
       */}
       <div className="absolute inset-0" style={{ opacity: "var(--ambient-bloom)" }}>
         {/* Primary bloom, offset left of centre. */}
-        <div className="absolute left-1/3 top-0 size-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-linear-to-b from-orange-500/70 to-transparent blur-3xl" />
+        <div className="absolute left-1/3 top-0 size-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-linear-to-b from-orange-500/70 to-transparent blur-2xl" />
         {/* Warmer, smaller companion bloom to the right. */}
-        <div className="absolute left-2/3 top-0 size-1/3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-linear-to-b from-rose-400/25 to-transparent blur-3xl" />
+        <div className="absolute left-2/3 top-0 size-1/3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-linear-to-b from-rose-400/25 to-transparent blur-2xl" />
       </div>
       {/* Vignette: transparent at the top, settling into the window background. */}
       <div

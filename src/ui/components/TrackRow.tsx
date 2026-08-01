@@ -416,6 +416,20 @@ export const TrackRow = memo(function TrackRow({
         "group/row relative flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left",
         "transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2",
         "focus-visible:ring-inset focus-visible:ring-ring",
+        /*
+         * Off-screen rows skip layout, paint and compositing.
+         *
+         * These lists are not windowed — a 500-track playlist really does build 500 rows of
+         * ~20 elements each — and windowing them properly fights both the drag-reorder and the
+         * shift-range selection, which need the full index space. This is the platform doing
+         * the same job for one line: the nodes stay, the rendering work does not.
+         *
+         * `auto 52px` is the row's height (40px artwork + `py-1.5`); the `auto` keyword means
+         * the browser prefers the size it last actually measured, so the guess only matters for
+         * rows that have never been on screen. Width is untouched by the containment because
+         * `w-full` states it outright rather than deriving it from content.
+         */
+        "[content-visibility:auto] [contain-intrinsic-size:auto_52px]",
         isCurrent && "bg-primary/5",
         isSelected && "bg-primary/10",
         className,

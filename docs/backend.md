@@ -10,7 +10,7 @@ See [architecture.md](./architecture.md) for the system view.
 | File | Lines | Responsibility |
 |---|---|---|
 | `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
-| `lib.rs` | ~3780 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
+| `lib.rs` | ~3870 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -188,17 +188,27 @@ Why: the WebView can't set `Cookie`/`Origin` headers or bypass CORS, and Innertu
 | Command | Signature | Notes |
 |---|---|---|
 | `fetch_audio_bytes` | `(url, trackId) -> Vec<u8>` | Downloads with YouTube-ish headers (Range, Origin, Referer, Sec-Fetch-*), same signed-IP handling |
-| `fetch_audio_source` | `(url, trackId, mimeType) -> { url, mimeType, byteLength }` | Downloads, validates the MP4 `ftyp` box at offset 4, stores the bytes in the in-process media server, returns a `http://127.0.0.1:<port>/audio/<key>` URL |
+| `fetch_audio_source` | `(url, trackId, mimeType, cookie?) -> { url, mimeType, byteLength }` | Downloads, validates the MP4 `ftyp` box at offset 4, publishes the bytes under `stream-<trackId>`, returns a `http://127.0.0.1:<port>/audio/<key>` URL |
 | `fetch_youtube_music_audio` | `(videoId) -> { bodyBase64, mimeType }` | Direct InnerTube player API using web-remix / web / iOS / Android / TV contexts that return undeciphered URLs |
 
 **Media server**: a lazily started `TcpListener` on `127.0.0.1:0` with a thread per connection,
 backed by `HashMap<key, MediaItem>`, and `parse_media_range` implementing HTTP Range so the WebView
 can seek. It exists because signed googlevideo URLs 403 when replayed from the WebView, and base64
-blobs of a whole track are wasteful. Entries are in-memory for the process lifetime.
+blobs of a whole track are wasteful.
 
-**Note:** with `AudioEngine.shouldUseNativeAudio()` hardcoded to `false`, these three are on the
-fallback path only — ordinary streaming goes through the IFrame decks. Downloads use
-`offline_audio_save` below.
+Three things about it are load-bearing, and each fixed half of a leak that only became hot once
+`native` playback made `fetch_audio_source` the default streaming path:
+
+- **`store_media_item()` caps the map at `MEDIA_SERVER_MAX_ITEMS` (3)**, evicting the coldest by an `AtomicU64` sequence — a counter rather than a timestamp, because two inserts inside a millisecond still need an order. Two is the real working set (playing track plus preloaded); the third is slack for a fast skip. The map was previously insert-only, so every song ever played stayed resident.
+- **Keys are stable** — `stream-<trackId>` and `offline-<trackId>`. `fetch_audio_source` used to append a millisecond timestamp, so a replay stored a second copy of the same song *and* left the webview holding a response under a URL it would never request again.
+- **Responses carry `Cache-Control: no-store`.** Without it the webview keeps its own copy of every audio body — whole songs, in the renderer process, retained a second time by the one place that cannot be asked to give them back. The cost is that seeking backwards re-requests a range instead of reading the webview's copy, which over loopback against an in-memory `Vec<u8>` is a memcpy.
+
+Replacing a key mid-playback is safe: `handle_media_request` clones the `Arc` before it writes, so
+a request already in flight finishes against the bytes it started with.
+
+**Note:** which of these runs for ordinary streaming depends on the audio-engine setting. In
+`iframe` mode (the default) none of them do — the IFrame decks stream directly. Downloads always
+use `offline_audio_save` below.
 
 ### Audio — offline downloads
 
@@ -337,6 +347,8 @@ release workflow under `.github/workflows/`.
 | `signed_content_length_reads_clen` | `clen` parsing |
 | `sanitize_log_url_*` | secrets withheld by value, diagnostics kept, unparseable input |
 | `cookie_domain_matches_*` | exact, parent-domain, and rejection cases |
+| `media_items_stay_capped_and_evict_the_coldest_first` | `store_media_item` holds the cap and drops the oldest, not an arbitrary entry |
+| `restoring_the_same_track_replaces_rather_than_accumulates` | a stable key means a replay reuses its slot |
 
 The frontend's equivalent is `npm run check` (`scripts/run-checks.mjs` over `src/**/*.check.ts`).
 There is no component/DOM test harness on either side.

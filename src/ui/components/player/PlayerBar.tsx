@@ -173,7 +173,7 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
       </AnimatePresence>
 
       <div
-        className="group/playerbar flex shrink-0 flex-col gap-1 bg-background px-4 pb-3 pt-2 backdrop-blur"
+        className="group/playerbar flex shrink-0 flex-col gap-1 bg-background px-4 pb-3 pt-2"
         onClick={handlePlayerBarClick}
       >
         {/* Expanded: the seek bar spans the full bar above everything. */}

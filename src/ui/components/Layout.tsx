@@ -171,7 +171,9 @@ export function Layout({
           onNavigateAlbum={onNavigateAlbum}
           onNavigatePlaylist={onNavigatePlaylist}
         />
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur rounded-tl-lg">
+        {/* No backdrop-blur: `bg-background` is fully opaque, so a backdrop filter here costs a
+            composited layer and a blur pass to render something nothing can see through. */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background rounded-tl-lg">
           {/*
             Ambient wash for the page beneath. Rendered here rather than inside the page so
             it can start at the very top of the column — behind the search bar — instead of
@@ -186,10 +188,20 @@ export function Layout({
               className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,background_25%,transparent)] rounded-tl-lg"
               aria-hidden="true"
             >
-              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-40 blur-[64px] saturate-[2]">
+              {/*
+                The blur radius drives the intermediate textures the compositor allocates, and
+                this is one of the largest surfaces in the window. 32px is enough here because
+                the source is a 120px image stretched across the full width — a ~20x upscale is
+                already most of the softness, and the filter only finishes the job.
+
+                `scale-125` is gone for the same reason: the negative insets already extend this
+                well past the clipped box on three sides, so the scale was adding composited
+                area to hide edges that were never reachable.
+              */}
+              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 opacity-40 blur-[32px] saturate-[2]">
                 {/*
-                  Deliberately the smallest variant: this is blurred by 64px and dropped to 40%
-                  opacity, so nothing above 120px survives to be seen — it only costs texture.
+                  Deliberately the smallest variant: this is blurred and dropped to 40% opacity,
+                  so nothing above 120px survives to be seen — it only costs texture.
                 */}
                 <TrackArtwork
                   className="size-full"
@@ -312,7 +324,7 @@ export function Layout({
                   animate={{ width: rightPanelWidth, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
                   transition={{ type: "spring", stiffness: 420, damping: 40 }}
-                  className="relative min-h-0 shrink-0 overflow-hidden  bg-card backdrop-blur"
+                  className="relative min-h-0 shrink-0 overflow-hidden bg-card"
                 >
                   {rightPanel}
                 </motion.div>

@@ -20,7 +20,7 @@ flowchart TB
     UI["React UI<br/>src/ui/**"]
     STATE["Controllers + stores<br/>src/player/**"]
     DS["DataSource layer<br/>src/datasource/**"]
-    IFRAME["Two hidden YouTube IFrame decks"]
+    IFRAME["Two hidden IFrame decks<br/><i>or</i> an &lt;audio&gt; element"]
   end
 
   subgraph Mini["mini-player window (mini.html → src/mini.tsx)"]
@@ -57,9 +57,12 @@ Four rules explain most of the design:
 1. **All network traffic to Google goes through Rust** (`proxy_http_request`) so the WebView's
    CORS/cookie rules never apply, cookie auth can be signed properly, and rotated `Set-Cookie`
    values can be merged back into the stored session.
-2. **Streaming audio is played by YouTube's own IFrame player**, not by `<audio>` — this dodges the
-   403s that signed googlevideo URLs return when replayed from a different context. Native `<audio>`
-   serves local files and *downloaded* tracks.
+2. **There are two playback engines and the user picks one** (`ui/settings/audioEngine.ts`).
+   `iframe` (the default) hands the video id to a hidden YouTube IFrame player, dodging the 403s
+   that signed googlevideo URLs return when replayed from a different context — at the cost of a
+   `youtube.com` subframe process, roughly 90 MB. `native` resolves and downloads the track through
+   Rust and plays it from an `<audio>` element, with no subframe at all. Local and downloaded
+   tracks always take the native path regardless of the setting.
 3. **Downloads are a separate path from playback.** `offline_audio_save` fetches the same signed URL
    in Rust with a PO token, in 4 MiB ranges, and stores the bytes on disk; playback of a downloaded
    track then never touches the network.
@@ -73,7 +76,7 @@ Four rules explain most of the design:
 | Window | Label | Entry | Notes |
 |---|---|---|---|
 | Main | `main` | `index.html` → `src/main.tsx` | 1280×900, min 900×600, `decorations: false`, `transparent: true`, `shadow: false` (custom title bar and window edge; Linux forces decorations on at runtime) |
-| Mini player | `mini-player` | `mini.html` → `src/mini.tsx` | transparent, always-on-top, `skipTaskbar`, shown when the main window is backgrounded or minimized |
+| Mini player | `mini-player` | `mini.html` → `src/mini.tsx` | transparent, always-on-top, `skipTaskbar`. **Created on first show and destroyed when the main window regains focus** — a hidden webview keeps its whole renderer process (~32 MB), so only destroying returns it. Create and destroy are serialized against each other in `miniPlayer.ts`, because alt-tab fires blur and focus within milliseconds. |
 | Sign-in | `youtube-music-login` | Google sign-in URL | Created on demand by Rust during `sign_in_youtube_music` (and headlessly by `refresh_youtube_music_cookie`), destroyed after the session cookie appears |
 
 Vite is configured with two Rollup inputs (`vite.config.ts`), so main and mini ship as separate
@@ -88,9 +91,9 @@ real `http://` origin. Dev builds use the normal Vite dev server on port 1420.
 
 | Event | Emitted when | Consumed by |
 |---|---|---|
-| `main-window-backgrounded` | main window loses focus and mini player isn't focused (100 ms debounce) | `App.tsx` — shows the mini player |
-| `main-window-minimized` | same check, but the window turned out to be minimized | `App.tsx` — shows the mini player even during drag suppression |
-| `window-focused` | main window regains focus | `App.tsx` — hides the mini player, triggers connection recovery |
+| `main-window-backgrounded` | main window loses focus and mini player isn't focused (100 ms debounce) | `App.tsx` — creates and shows the mini player window |
+| `main-window-minimized` | same check, but the window turned out to be minimized | `App.tsx` — creates and shows it even during drag suppression |
+| `window-focused` | main window regains focus | `App.tsx` — destroys the mini player window, triggers connection recovery |
 | `windows-media-control` | SMTC or taskbar thumbnail button pressed | `useMediaSession` |
 | `offline-download-progress` | per-chunk progress during `offline_audio_save` | `player/offlineStore.ts` |
 | `local-audio-changed` | `notify` watcher sees a change under a watched music folder | `main.tsx` → `notifyLocalPlaylistsChanged()` |
@@ -180,7 +183,7 @@ Cache keys are versioned strings (`youtube-music:library:v5`, `youtube-music:tra
 
 | Module | Responsibility |
 |---|---|
-| `AudioEngine.ts` | Owns **two** hidden YouTube IFrame decks plus an optional `HTMLAudioElement`. The standby deck holds the *next* track already cued, which is what makes transitions gapless; with a non-zero crossfade the two decks' volumes are ramped past each other. A module-level `playbackClaimId` + `playbackOwner` pair guarantees only one engine makes sound at a time; an idle standby is freed after a timeout. |
+| `AudioEngine.ts` | Owns **two** hidden YouTube IFrame decks plus an optional `HTMLAudioElement`, and routes between them on `shouldUseNativeAudio()` — a live read of the audio-engine setting, so a change takes effect on the next track rather than the next launch. The standby deck holds the *next* track already cued, which is what makes transitions gapless; with a non-zero crossfade the two decks' volumes are ramped past each other. **Neither applies in native mode**, which has no deck to preload onto. `releaseIframePlayer()` frees the decks (and their subframe process) without disposing the engine; a module-level listener calls it on every engine except the current playback owner when the setting flips to native. `playbackClaimId` + `playbackOwner` guarantee only one engine makes sound at a time. |
 | `Queue.ts` | Pure queue data structure with three regions: played/current, a **manual queue** segment (`playNext` / `addToQueue`), and automatic upcoming tracks. Shuffle only touches the automatic region and remembers the original order so it can be restored. `move()` rejects cross-region moves. |
 | `PlayerController.ts` | One per tab. Orchestrates DataSource → AudioEngine → Queue, playback order (shuffle and repeat compose independently), crossfade/gapless settings, playback rate, stop-after-track, radio/autoplay refills, history, error surfacing, session export/restore, and Discord presence updates. |
 | `TabManager.ts` | Owns the `Map<tabId, PlayerController>`. Distinguishes the **focused** tab (what you're looking at) from the **playback owner** (what's making sound), and suspends/resumes engines on switch. |
@@ -194,7 +197,7 @@ Cache keys are versioned strings (`youtube-music:library:v5`, `youtube-music:tra
 | `playlistTransfer.ts` | Versioned JSON export/import of playlists. |
 | `recentPlaylists.ts` | Last-played timestamps per playlist for sidebar ordering. |
 | `playbackSettings.ts` | Volume/mute, playback rate, crossfade seconds, gapless flag — mirrored to durable settings. |
-| `appSession.ts` | Whole-app session snapshot in localStorage: tabs + per-tab player sessions. Restores `playing` as `paused` so launching the app never autoplays. Honours the "restore tabs and queues" setting. |
+| `appSession.ts` | Whole-app session snapshot in localStorage: tabs + per-tab player sessions. Restores `playing` as `paused` so launching the app never autoplays. Honours the "restore tabs and queues" setting. `saveAppSession` compares the serialized payload against the last one written and skips the (synchronous, disk-backed) `setItem` when nothing moved — it is called from three places and most calls are no-ops. |
 | `DiscordRPC.ts` | Sanitizes presence payloads (128-char text limit, HTTPS-only artwork from a trusted host allowlist) before invoking Rust. |
 | `LastFm.ts` | Tracks listened seconds, sends `nowPlaying` once per track and scrobbles at `min(240 s, duration/2)`; tracks shorter than 31 s never scrobble. |
 | `useMediaSession.ts` | Bridges player state to Windows SMTC (via `update_windows_media_session` + `windows-media-control` events) or, elsewhere, the WebView `navigator.mediaSession`. |
@@ -215,7 +218,7 @@ Detailed in [backend.md](./backend.md).
 | File | Responsibility |
 |---|---|
 | `main.rs` | Sets the Windows AppUserModelID, strips the WebView2 diagnostics env var, calls `run()` |
-| `lib.rs` (~3.8k lines) | Commands, cache, settings, logging, keyring/session + cookie jar, HTTP proxy, audio fetch, offline store, local files and tags, folder watcher, media server, tray, window event wiring |
+| `lib.rs` (~3.9k lines) | Commands, cache, settings, logging, keyring/session + cookie jar, HTTP proxy, audio fetch, offline store, local files and tags, folder watcher, media server, tray, window event wiring |
 | `discord_rpc.rs` | `DiscordIpcClient` lifecycle and activity building |
 | `lastfm.rs` | MD5-signed Last.fm API calls, session in keyring |
 | `windows_media.rs` | SMTC integration + taskbar thumbnail toolbar buttons |
@@ -235,9 +238,10 @@ main.tsx
   applyPaperPcMode()                 → data-paper-pc (reduced-motion / no blur theme)
   applyNativeWindowControls()        → window decorations on/off
   hydrateMainWindowGeometry() → restoreMainWindowGeometry()
-  Promise.all([ ~17 hydrate* calls: paperPc, theme, windowControls, miniPlayer, playerControls,
-                queuePanel, tray, audioQuality, lastFm, discord, sidebar, keyboardShortcuts,
-                toolbarItems, homeSections, playbackSettings, playHistory, sessionRestore ])
+  Promise.all([ ~18 hydrate* calls: paperPc, theme, windowControls, miniPlayer, playerControls,
+                queuePanel, tray, audioQuality, audioEngineMode, lastFm, discord, sidebar,
+                keyboardShortcuts, toolbarItems, homeSections, playbackSettings, playHistory,
+                sessionRestore ])
   DiscordRpcService.init()
   window error / unhandledrejection hooks
   createRoot().render(<StrictMode><ErrorBoundary><App/></ErrorBoundary></StrictMode>)
@@ -268,15 +272,19 @@ UI onClick
        dataSource.getTrack(videoId)                  cached, merged with the queued row
        ensureTrackLoaded(track)
           local / downloaded → local_audio_read | offline_audio_source → <audio>
-          remote             → audioEngine.loadTrack(videoId) → deck cueVideoById, wait for CUED
+          remote, iframe     → audioEngine.loadTrack(videoId) → deck cueVideoById, wait for CUED
+          remote, native     → getStreamData() → fetch_audio_source → <audio>
+                               (also releases the IFrame decks, freeing the subframe)
        audioEngine.play()                            claims global playback, waits for PLAYING
        setState({status:"playing"}) → recordPlay(track)
   → emit() → React re-render + Discord presence + Last.fm nowPlaying
 ```
 
-Ahead of the end of a track the engine cues the next one onto the **standby deck**. Track end
-(`onEnded`) then hands over: with `crossfadeSec` at 0 the swap is gapless; above 0 the two decks'
-volumes ramp past each other. Repeat-one replays instead; otherwise the next queue item; otherwise
+In `iframe` mode, ahead of the end of a track the engine cues the next one onto the **standby
+deck**. Track end (`onEnded`) then hands over: with `crossfadeSec` at 0 the swap is gapless; above 0
+the two decks' volumes ramp past each other. Native mode has no standby deck, so it neither
+preloads nor crossfades — `onEnded` on the `<audio>` element simply advances the queue.
+Repeat-one replays instead; otherwise the next queue item; otherwise
 queue-end recommendations (playlist mode); otherwise the radio queue if autoplay is on; otherwise
 pause. `refillAutomaticQueue()` tops the automatic region back up when fewer than 10 tracks remain
 and the queue isn't a fixed playlist.
@@ -289,16 +297,18 @@ letting a stale response overwrite state.
 
 | Track kind | Path |
 |---|---|
-| YouTube, streaming | No stream URL is fetched at all — the IFrame deck handles it from the video id. |
-| YouTube, downloaded | `offline_audio_source` serves the stored bytes from the local `127.0.0.1` media server, with Range support. No network. |
+| YouTube, streaming, `iframe` mode | No stream URL is fetched at all — the IFrame deck handles it from the video id. |
+| YouTube, streaming, `native` mode | `getStreamData` → `resolveStreamUrl` → `fetch_audio_source` downloads it, validates the MP4 `ftyp` box, and re-serves it from the local media server. |
+| YouTube, downloaded | `offline_audio_source` serves the stored bytes from the media server, with Range support. No network. |
 | YouTube, download | `getStreamData` → Innertube `getBasicInfo` → best adaptive `audio/mp4` at the configured quality → decipher → PO token → `offline_audio_save` fetches it in 4 MiB ranges, 6 at a time, emitting progress. |
-| YouTube, native fallback | `fetch_audio_source` downloads once, validates the MP4 `ftyp` box, and re-serves it from the media server. |
 | Local file | `local_audio_read` returns base64 bytes + a MIME type guessed from the extension; the frontend builds a `Blob` object URL. |
 
-`shouldUseNativeAudio()` returns `false` unconditionally — for *streaming* YouTube tracks the
-native path stays off. The comment in `AudioEngine.ts` records why: the backend download path
-returned 403s, so v1.2.65 reverted every platform to the IFrame player. The PO token work since
-then is what made the download path viable, and downloads use it.
+`shouldUseNativeAudio()` was hardcoded `false` from v1.2.65 — the backend download path answered
+403 for remote streams, so every platform was reverted to the IFrame player. **PO tokens are what
+fixed it**: the download feature has used this same resolve-and-fetch path successfully ever since,
+which is what made it safe to offer again as a setting. It stays opt-in because native resolves and
+downloads the whole track before the first sample plays (so a track starts slower) and because
+gapless and crossfade ride the standby IFrame deck, so neither applies to it.
 
 ### 4.4 Authentication
 
@@ -380,6 +390,7 @@ while `loadTrack`/`playTrackById` first *claim* the focused tab as the new owner
 | localStorage | WebView profile | Same settings (fast path) + session, play history, local playlists, playlist membership, offline manifest, recent playlists, recent searches, update snoozes |
 | Data cache | `<app_cache_dir>/data-cache-v1/entries/<fnv1a>.json` | Library, playlists, albums, artists, tracks, browse pages, lyrics, search results. LRU-evicted to a configurable budget (default 4 GiB) |
 | Offline audio | `<app_data_dir>/offline-audio-v1/<trackId>.bin` | Downloaded track bytes. The frontend keeps the metadata manifest in localStorage and reconciles it against `offline_audio_list`. Pruned oldest-first to a configurable ceiling (default 8 GiB) |
+| In-memory media bodies | `MediaServer.items`, Rust process | The audio currently playing and the one preloaded. Hard cap of 3 entries, coldest evicted — see [backend.md](./backend.md) §3 |
 | Secrets | OS keyring (`com.ytmusicdock.app`) — plus an AES-GCM file on macOS | YouTube cookie header, Last.fm session key |
 | Logs | `<app_log_dir>/current.log` | Truncated on every launch; older `*.log` files deleted |
 
@@ -455,9 +466,10 @@ Recorded so nobody re-derives them:
   (all `offline_audio_*`, `read_text_file`, `write_text_file`, `local_audio_*_tags`,
   `local_audio_watch`/`unwatch`, `refresh_youtube_music_cookie`, `open_current_log`) and nothing
   broke, which is the proof it is inert.
-- `AudioEngine.shouldUseNativeAudio()` is hardcoded `false`; the native streaming path exists but is
-  reachable only for local and downloaded files.
-- `App.tsx` is 2161 lines with ~30 `useEffect` blocks, some at zero indentation — still the
+- Gapless and crossfade silently do nothing in `native` audio-engine mode — they ride the standby
+  IFrame deck, which that mode has no equivalent of. The Settings copy says so, but nothing in the
+  code prevents the combination.
+- `App.tsx` is 2150 lines with ~30 `useEffect` blocks, some at zero indentation — still the
   highest-value refactor target in the repo.
 - `getStreamUrl` on the YouTube Music data source is required by the abstract class but never called
   by the controllers.
