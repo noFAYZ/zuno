@@ -386,31 +386,51 @@ export class PlayerController {
        * abandoning playback.
        */
       const knownTrack = queuedTrack ?? getOfflineTrack(videoId);
-      let fetchedTrack: Track;
+      const mergeWithQueued = (fetched: Track): Track => (queuedTrack
+        ? {
+            ...fetched,
+            ...queuedTrack,
+            durationSec: fetched.durationSec ?? queuedTrack.durationSec,
+            artworkUrl: queuedTrack.artworkUrl ?? fetched.artworkUrl,
+            artists: queuedTrack.artists ?? fetched.artists,
+          }
+        : fetched);
+
+      /*
+       * Metadata is fetched *alongside* the audio, not before it.
+       *
+       * A row that was clicked in a list already carries its title, artist, artwork and
+       * duration — everything the player bar shows. Awaiting `getTrack` before touching the
+       * audio spent a full round trip re-fetching what was already on screen, and it did so
+       * before stream resolution could even begin, so two serial round trips stood between the
+       * click and the first byte. Playing from what we have collapses that to one, and the
+       * refresh lands a moment later with anything the row was missing.
+       *
+       * Only a track we know nothing about still has to wait.
+       */
+      let track: Track;
       if (queuedTrack?.source === "local") {
-        fetchedTrack = queuedTrack;
-      } else {
-        try {
-          fetchedTrack = await this.dataSource.getTrack(videoId);
-        } catch (error) {
-          if (!knownTrack) throw error;
-          logInternalWarn("PlayerController.playTrackById metadata unavailable", {
-            videoId,
-            error: error instanceof Error ? error.message : String(error),
+        track = queuedTrack;
+      } else if (knownTrack) {
+        track = mergeWithQueued(knownTrack);
+        void this.dataSource.getTrack(videoId)
+          .then((fetched) => {
+            // A skip during the refresh makes this answer belong to a track nobody is on.
+            if (requestId !== this.playTrackRequestId) return;
+            this.setState({ currentTrack: mergeWithQueued(fetched) });
+          })
+          .catch((error) => {
+            // Playback is already under way on the known copy; this is a missing refresh, not
+            // a failure — offline is the ordinary case.
+            logInternalWarn("PlayerController.playTrackById metadata refresh failed", {
+              videoId,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-          fetchedTrack = knownTrack;
-        }
+      } else {
+        track = mergeWithQueued(await this.dataSource.getTrack(videoId));
       }
       if (requestId !== this.playTrackRequestId) return false;
-      const track = queuedTrack
-        ? {
-            ...fetchedTrack,
-            ...queuedTrack,
-            durationSec: fetchedTrack.durationSec ?? queuedTrack.durationSec,
-            artworkUrl: queuedTrack.artworkUrl ?? fetchedTrack.artworkUrl,
-            artists: queuedTrack.artists ?? fetchedTrack.artists,
-          }
-        : fetchedTrack;
 
       this.loadedTrackId = null;
       this.setState({
@@ -424,6 +444,17 @@ export class PlayerController {
       if (autoplayWhenQueueEnds && playbackQueue?.length === 1) {
         void this.primeRadioQueue(track, requestId);
       }
+      /*
+       * Warm the next track *while* this one loads, not after.
+       *
+       * Resolution costs the better part of a second, and starting only once this track had
+       * finished meant a skip inside the first second always lost the race — which is exactly
+       * how someone skips through a queue looking for something. Both are network-bound and
+       * independent, so they overlap for free. The call at the end of `ensureTrackLoaded`
+       * stays as the catch-up for anything this one could not see yet, and no-ops when the
+       * slot is already filled.
+       */
+      this.warmNextTrack();
       await this.ensureTrackLoaded(track);
       if (requestId !== this.playTrackRequestId) return false;
 
@@ -1245,11 +1276,19 @@ export class PlayerController {
       });
   }
 
-  /** Takes the warmed stream if it is for this track, and empties the slot either way. */
+  /**
+   * Takes the warmed stream if it is for this track, and leaves it alone if it is not.
+   *
+   * It used to empty the slot either way, which was fine while warming only began after the
+   * current track had loaded. Now that a warm starts *alongside* that load, the slot often
+   * holds the next track while this one is still being claimed — and discarding it there threw
+   * away the very thing the early start exists to produce.
+   */
   private claimWarmedStream(trackId: string): StreamData | undefined {
-    const warmed = this.warmedStream;
+    if (this.warmedStream?.trackId !== trackId) return undefined;
+    const { data } = this.warmedStream;
     this.warmedStream = null;
-    return warmed?.trackId === trackId ? warmed.data : undefined;
+    return data;
   }
 
   /**
