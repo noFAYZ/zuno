@@ -59,7 +59,11 @@ Four rules explain most of the design:
    CORS/cookie rules never apply, cookie auth can be signed properly, and rotated `Set-Cookie`
    values can be merged back into the stored session.
 2. **There are three playback engines and the user picks one** (`ui/settings/audioEngine.ts`).
-   `iframe` (the default) hands the video id to a hidden YouTube IFrame player, dodging the 403s
+   `rust` is the default: it resolves the signed URL, decodes it in the Rust process and plays
+   straight out to the sound card — no subframe, no media element, no audio in the renderer. A
+   resolve or fetch that Google refuses is **not fatal**: `ensureTrackLoaded` catches it and plays
+   that one track on the IFrame deck instead, which is what made defaulting to it safe.
+   `iframe` hands the video id to a hidden YouTube IFrame player, dodging the 403s
    that signed googlevideo URLs return when replayed from a different context — at the cost of a
    `youtube.com` subframe process, roughly 90 MB. `native` resolves and downloads the track through
    Rust and plays it from an `<audio>` element, with no subframe at all. `rust` resolves the same

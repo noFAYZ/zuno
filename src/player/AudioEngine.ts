@@ -212,6 +212,16 @@ export class AudioEngine {
   private rustStandbyTrackId: string | null = null;
   private rustDurationSec = 0;
   private rustStandbyDurationSec = 0;
+  /**
+   * This track is on the IFrame deck even though the selected engine is not `iframe`.
+   *
+   * Every other branch here asks *what is loaded* — `rustTrackId`, `audio` — rather than what
+   * the setting says, and falls through to the player when neither is. The exception is the
+   * `<audio>` branch, which also fires on the setting alone so that native mode reports "no
+   * track loaded" rather than silently doing nothing; this flag is what stops that branch from
+   * claiming a track the IFrame deck is holding.
+   */
+  private iframeFallbackActive = false;
   private player: YouTubePlayer | null = null;
   private playerHost: HTMLElement | null = null;
   private playerPromise: Promise<YouTubePlayer> | null = null;
@@ -293,6 +303,28 @@ export class AudioEngine {
       return;
     }
 
+    await this.loadIframeTrack(videoId);
+  }
+
+  /**
+   * Plays a track on the IFrame deck regardless of which engine is selected.
+   *
+   * The Rust engine resolves a signed googlevideo URL and can be refused; the IFrame player is
+   * Google's own embed resolving its own URLs, so it is the one path that cannot 403. That is
+   * why it was the only engine between v1.2.65 and PO tokens landing, and it is what keeps a
+   * refusal from becoming a dead track now that Rust is the default.
+   *
+   * Costs the `youtube.com` subframe for this track only — the next one tries Rust again.
+   */
+  async loadIframeFallback(videoId: string): Promise<void> {
+    this.releaseRustAudio();
+    this.releaseNativeAudio();
+    this.iframeFallbackActive = true;
+    await this.loadIframeTrack(videoId);
+    logInternalWarn("AudioEngine fell back to the YouTube player", { videoId });
+  }
+
+  private async loadIframeTrack(videoId: string): Promise<void> {
     const requestId = ++this.loadRequestId;
     this.releaseNativeAudio();
     const player = await this.ensurePlayer();
@@ -354,7 +386,7 @@ export class AudioEngine {
       await rustAudio.play();
       return claimId === playbackClaimId && playbackOwner === this;
     }
-    if (this.useNativeAudio || this.audio) {
+    if (this.audio || (this.useNativeAudio && !this.iframeFallbackActive)) {
       if (!this.audio || !this.currentVideoId) {
         throw new Error("No audio track is loaded.");
       }
@@ -471,6 +503,7 @@ export class AudioEngine {
       playbackClaimId += 1;
     }
     this.cancelFade();
+    this.iframeFallbackActive = false;
     this.releaseRustAudio();
     this.releaseNativeAudio();
     this.player?.stopVideo();
@@ -859,6 +892,7 @@ export class AudioEngine {
     durationSec: number,
   ): Promise<void> {
     const requestId = ++this.loadRequestId;
+    this.iframeFallbackActive = false;
     routeRustEnded();
     /*
      * Both entry points come through here, and this one has to run before the media server is
@@ -929,6 +963,7 @@ export class AudioEngine {
     sourceUrl?: string,
   ): Promise<void> {
     const requestId = ++this.loadRequestId;
+    this.iframeFallbackActive = false;
     // This is the path that publishes bodies to the media server, so a later switch back to the
     // Rust engine has something to release again.
     mediaServerReleased = false;
@@ -1008,7 +1043,7 @@ export class AudioEngine {
   /** 1 is normal speed. Applies to whichever backend is currently playing. */
   setPlaybackRate(rate: number): void {
     this.playbackRate = Math.min(4, Math.max(0.25, rate));
-    if (this.useRustAudio) {
+    if (this.useRustAudio && !this.iframeFallbackActive) {
       void rustAudio.setRate(this.playbackRate).catch((error: unknown) => {
         rustAudio.warn("AudioEngine rust rate failed", error);
       });

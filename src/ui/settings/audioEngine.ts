@@ -23,9 +23,11 @@ import {
  * real decks and mixes them, decodes as the bytes arrive rather than after, and never puts audio
  * in the renderer at all.
  *
- * `iframe` remains the default because it is the path that cannot 403: it is Google's own player
- * resolving its own URLs. Both others depend on a signed URL and a PO token, which is what
- * hardcoded `native` off between v1.2.65 and PO tokens landing.
+ * `rust` is the default. What made that safe is not that a signed URL never gets refused — it
+ * still can, and that is what hardcoded `native` off between v1.2.65 and PO tokens landing — but
+ * that a refusal is no longer fatal: `PlayerController` catches a failed resolve or load on a
+ * streamed track and plays it on the IFrame deck instead, costing that one track a subframe.
+ * `iframe` stays selectable for anyone who wants Google's player for everything.
  */
 export type AudioEngineMode = "iframe" | "native" | "rust";
 
@@ -33,7 +35,7 @@ const STORAGE_KEY = "audio-engine-mode";
 /** Exported so `AudioEngine` can free its decks the moment the mode stops being `iframe`. */
 export const AUDIO_ENGINE_MODE_CHANGE_EVENT = "audio-engine-mode-change";
 const CHANGE_EVENT = AUDIO_ENGINE_MODE_CHANGE_EVENT;
-const DEFAULT_MODE: AudioEngineMode = "iframe";
+const DEFAULT_MODE: AudioEngineMode = "rust";
 
 export const AUDIO_ENGINE_MODES: ReadonlyArray<{
   value: AudioEngineMode;
@@ -41,19 +43,19 @@ export const AUDIO_ENGINE_MODES: ReadonlyArray<{
   hint: string;
 }> = [
   {
+    value: "rust",
+    label: "Rust audio",
+    hint: "Decoded in the app. Lowest memory, gapless and crossfade, falls back if a track is refused.",
+  },
+  {
     value: "iframe",
     label: "YouTube player",
-    hint: "Most reliable. Runs a hidden youtube.com frame, ~90 MB.",
+    hint: "Google's own player for everything. Runs a hidden youtube.com frame, ~90 MB.",
   },
   {
     value: "native",
     label: "Native audio",
-    hint: "No hidden frame. Lower memory, slower to start, no gapless or crossfade.",
-  },
-  {
-    value: "rust",
-    label: "Rust audio",
-    hint: "Decoded in the app. Lowest memory, starts fastest, keeps gapless and crossfade.",
+    hint: "Plays through the webview. Keeps a second copy of each track in memory, no gapless.",
   },
 ];
 

@@ -1174,31 +1174,56 @@ export class PlayerController {
        * and holding it after use would keep a stale URL alive for a track already playing.
        */
       const warmed = this.claimWarmedStream(track.id);
-      const audioData = useNativeAudio
-        ? warmed ?? await this.dataSource.getStreamData?.(track)
-        : undefined;
-      if (useNativeAudio && !audioData) {
-        throw new Error("The data source does not support native audio playback.");
-      }
 
-      if (isDownloaded && audioData) {
-        await this.audioEngine.loadNativeFallback(
-          track.id,
-          audioData.bytes,
-          audioData.mimeType,
-          audioData.sourceUrl,
-          audioData.rustSource,
-          track.durationSec,
-        );
-      } else {
-        await this.audioEngine.loadTrack(
-          track.id,
-          audioData?.bytes,
-          audioData?.mimeType,
-          audioData?.sourceUrl,
-          audioData?.rustSource,
-          track.durationSec,
-        );
+      /*
+       * A streamed track on the Rust engine gets the IFrame deck as a safety net.
+       *
+       * Both halves of this can be refused by Google and neither is the listener's fault:
+       * resolving needs a PO token and an InnerTube `player` call, and fetching the signed URL
+       * needs googlevideo to honour it. The IFrame player is the one path that cannot 403 — it
+       * is Google's own embed resolving its own URLs — which is exactly why it was the only
+       * engine between v1.2.65 and PO tokens landing.
+       *
+       * Only for streaming. Local files returned above and have no IFrame equivalent anyway,
+       * and falling back for a *download* would stream the online copy of a track the user
+       * saved on purpose.
+       */
+      const canFallBackToIframe = this.audioEngine.usesRustAudio() && !isDownloaded;
+
+      try {
+        const audioData = useNativeAudio
+          ? warmed ?? await this.dataSource.getStreamData?.(track)
+          : undefined;
+        if (useNativeAudio && !audioData) {
+          throw new Error("The data source does not support native audio playback.");
+        }
+
+        if (isDownloaded && audioData) {
+          await this.audioEngine.loadNativeFallback(
+            track.id,
+            audioData.bytes,
+            audioData.mimeType,
+            audioData.sourceUrl,
+            audioData.rustSource,
+            track.durationSec,
+          );
+        } else {
+          await this.audioEngine.loadTrack(
+            track.id,
+            audioData?.bytes,
+            audioData?.mimeType,
+            audioData?.sourceUrl,
+            audioData?.rustSource,
+            track.durationSec,
+          );
+        }
+      } catch (error) {
+        if (!canFallBackToIframe) throw error;
+        logInternalWarn("PlayerController.ensureTrackLoaded falling back to the YouTube player", {
+          trackId: track.id,
+          error: getErrorMessage(error),
+        });
+        await this.audioEngine.loadIframeFallback(track.id);
       }
 
       this.loadedTrackId = track.id;
