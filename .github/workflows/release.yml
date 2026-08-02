@@ -341,6 +341,11 @@ jobs:
     name: Publish to winget
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    # winget is one distribution channel among several, and the action is pinned to `@main`, so
+    # it breaks without anything here changing — it has now failed two releases running while
+    # every artifact published fine. Failing the whole release for it also meant the AUR job
+    # below, which waits on this workflow succeeding, never ran at all.
+    continue-on-error: true
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
 

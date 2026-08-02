@@ -8,8 +8,15 @@
 name: AUR
 
 on:
-  release:
-    types: [published]
+  # `workflow_run`, not `release: published`.
+  #
+  # The release is cut by GITHUB_TOKEN, and GitHub deliberately refuses to let a token-created
+  # event trigger further workflows — so `release: published` never fired once. Every AUR
+  # publish so far has been a manual dispatch, which is exactly how the package ended up two
+  # versions behind without anyone noticing.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   # Lets a botched package be re-pushed without cutting another release.
   workflow_dispatch:
     inputs:
@@ -25,17 +32,29 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
+    # A release that did not build is not a release to package.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `workflow_run` checks out the default branch head by default, which is usually but
+          # not always the commit that was released.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Resolve version
         id: version
         run: |
+          set -euo pipefail
           if [ -n "${{ github.event.inputs.version }}" ]; then
             version="${{ github.event.inputs.version }}"
           else
-            version="${GITHUB_REF_NAME#v}"
+            # package.json is the same source the release workflow reads, so the two cannot
+            # disagree about what was just shipped. There is no tag in a `workflow_run` event.
+            version="$(grep -m1 '"version"' package.json | cut -d'"' -f4)"
           fi
+          echo "Publishing zuno ${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install packaging tools
@@ -83,16 +102,15 @@ jobs:
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor }}@users.noreply.github.com"
 
-          # A package that does not exist yet clones as an empty repo rather than failing, so
-          # the first run creates it and every run after updates it. That matters because the
-          # maintainer is on Windows: without this, publishing would need a Linux box once,
-          # purely to make the initial commit.
-          git clone ssh://aur@aur.archlinux.org/zuno.git /tmp/aur || {
-            echo "No AUR repo yet — initialising one."
-            mkdir -p /tmp/aur
-            git -C /tmp/aur init -b master
-            git -C /tmp/aur remote add origin ssh://aur@aur.archlinux.org/zuno.git
-          }
+          # A package that does not exist yet clones as an *empty* repo rather than failing, so
+          # this one command covers both the first publish and every one after it.
+          #
+          # Deliberately no `|| initialise an empty repo` fallback. The package exists now, so a
+          # clone that fails means the server said no — and during an AUR maintenance window
+          # that fallback reported "No AUR repo yet", built a root commit with no history, and
+          # tried to push it over the real package. It was saved only by push rejecting a
+          # non-fast-forward. A failure here should stop the job and be read.
+          git clone ssh://aur@aur.archlinux.org/zuno.git /tmp/aur
 
           # Only these two files belong in an AUR repo — no sources, no built packages.
           cp packaging/aur/zuno/PKGBUILD packaging/aur/zuno/.SRCINFO /tmp/aur/
