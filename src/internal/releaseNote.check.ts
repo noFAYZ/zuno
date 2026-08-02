@@ -88,13 +88,36 @@ equal(
   "a body that is nothing but a link has no empty text around it",
 );
 
-// Rejoining every segment must reproduce the original exactly, or the note silently loses text.
-const roundTrip = parseReleaseNote(RELEASE_NOTE_BODY).map((s) => s.value).join("");
+/* Rejoining every segment must reproduce the original exactly, or the note silently loses text.
+   `**` is the one thing deliberately consumed, so it is put back before comparing — everything
+   else, prose and links alike, has to survive verbatim. */
+const roundTrip = parseReleaseNote(RELEASE_NOTE_BODY)
+  .map((s) => (s.kind === "strong" ? `**${s.value}**` : s.value))
+  .join("");
 equal(roundTrip, RELEASE_NOTE_BODY, "parsing never drops or duplicates a character");
 
 check(
   parseReleaseNote(RELEASE_NOTE_BODY).some((s) => s.kind === "link"),
   "this release's note actually contains a link",
 );
+
+/* Emphasis. Added for the 1.3.0 note, which leads with a bulleted list of feature names — a
+   `**` that silently rendered as literal asterisks would be visible to every user on update. */
+const bold = parseReleaseNote("Try **Gapless** today");
+equal(bold.length, 3, "emphasis splits the line in three");
+equal(bold[1].kind, "strong", "the middle piece is emphasised");
+equal(bold[1].kind === "strong" ? bold[1].value : "", "Gapless", "and the markers are stripped");
+
+const mixed = parseReleaseNote("**Equaliser** — see /r/myzuno");
+equal(mixed.filter((s) => s.kind === "strong").length, 1, "emphasis and links coexist");
+equal(mixed.filter((s) => s.kind === "link").length, 1, "the link still resolves alongside it");
+
+check(
+  parseReleaseNote(RELEASE_NOTE_BODY).some((s) => s.kind === "strong"),
+  "this release's note actually uses emphasis",
+);
+
+// Unpaired markers are prose, not broken markup: the note is hand-written per release.
+equal(parseReleaseNote("2 ** 3 is eight").length, 1, "a lone marker stays text");
 
 console.log("releaseNote self-check passed");

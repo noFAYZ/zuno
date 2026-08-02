@@ -78,6 +78,13 @@ export function ReleaseNoteDialog({ version, onDismiss }: ReleaseNoteDialogProps
               {parseReleaseNote(RELEASE_NOTE_BODY).map((segment, index) =>
                 segment.kind === "text" ? (
                   segment.value
+                ) : segment.kind === "strong" ? (
+                  <strong
+                    key={`${index}:${segment.value}`}
+                    className="font-semibold text-foreground"
+                  >
+                    {segment.value}
+                  </strong>
                 ) : (
                   <button
                     key={`${index}:${segment.value}`}
