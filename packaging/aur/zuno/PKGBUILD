@@ -27,6 +27,13 @@ depends+=(
   'gst-libav'
 )
 
+# The Rust audio engine bypasses WebKitGTK entirely: cpal opens ALSA directly, and libopus is
+# statically linked in rather than loaded, so only the ALSA runtime is needed here. The
+# GStreamer plugins above stay because the IFrame engine is still the default.
+depends+=(
+  'alsa-lib'
+)
+
 optdepends=(
   'gst-plugins-bad: extra container and codec support'
   'gst-plugins-ugly: extra codec support'

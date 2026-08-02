@@ -90,7 +90,9 @@ jobs:
             libsoup-3.0-dev \
             librsvg2-dev \
             libssl-dev \
-            build-essential
+            build-essential \
+            libasound2-dev \
+            cmake
 
       # `--locked` because a Cargo.toml change that forgets its Cargo.lock is the other way this
       # goes wrong quietly.

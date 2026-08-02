@@ -11,7 +11,8 @@ See [architecture.md](./architecture.md) for the system view.
 |---|---|---|
 | `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
 | `lib.rs` | ~3940 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
-| `audio.rs` | ~440 | The native engine: two rodio decks, the crossfade ramp, the position tick, and the blocking reader that lets symphonia decode a body still downloading |
+| `audio.rs` | ~460 | The native engine: two rodio decks, the crossfade ramp, the position tick, and the blocking reader that lets symphonia decode a body still downloading |
+| `opus_source.rs` | ~250 | Opus playback — symphonia demuxes the WebM/Ogg container, libopus decodes the packets, the result is a rodio `Source` |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -23,6 +24,7 @@ See [architecture.md](./architecture.md) for the system view.
 `tauri-plugin-{autostart,opener,localhost,updater,process,dialog}`,
 `reqwest` (rustls-tls, gzip/brotli/deflate, **stream**), `futures-util` (parallel range downloads),
 `rodio` 0.22 with `symphonia-all` (symphonia decodes, cpal plays, rodio resamples between them),
+`symphonia` 0.5 directly for demuxing and `opus` 0.3 for the one codec symphonia lacks,
 `keyring` 3.6 with native backends, `lofty` 0.24 (audio tag read/write), `notify` 8.2 (folder
 watching), `discord-rich-presence`, `md5`, `base64`, `url`, `portpicker`.
 macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows adds the `windows`
@@ -228,7 +230,23 @@ always use `offline_audio_save` below.
 | `media_server_release` | `() -> usize` | Drops every body the media server holds, and returns how many. Called once on the first Rust load, after the `<audio>` element is torn down |
 
 `NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
-`file` (a path, re-validated here rather than trusted from the frontend).
+`file` (a path, re-validated here rather than trusted from the frontend). Each carries a mime
+type, because that is what picks the decoder — a downloaded body has no extension to read it from.
+
+**Opus is not optional.** symphonia has no Opus decoder in 0.5 — not a feature flag, the codec is
+absent — and YouTube serves `audio/webm; codecs="opus"` for the large majority of tracks at
+`high` quality, and as the *only* audio offered for many of them. So `opus_source.rs` uses
+symphonia purely as a demuxer and hands the packets to libopus; everything else (AAC, FLAC, MP3,
+ALAC, Vorbis, WAV) stays on `rodio::Decoder`. `is_opus()` routes on the declared mime type, and
+getting it wrong is a failed load rather than a fallback — neither decoder can read the other's
+format. Two details are load-bearing: OpusHead's **pre-skip** is discarded, or every track opens
+with an audible tick, and a **seek resets the decoder state**, or the first frames after a jump
+are reconstructed against samples from somewhere else and arrive as noise.
+
+**Build requirements this adds.** `opus` builds libopus from source with **cmake**, and `cpal`
+links **ALSA** on Linux (`libasound2-dev` / `alsa-lib`). Both are in `ci.yml`, `release.yml` and
+the AUR PKGBUILD. On Windows, cmake ships with the Visual Studio Build Tools but is not on `PATH`
+by default.
 
 **The media server is not needed on this path at all.** `media_server()` is lazy, so an app that
 launches straight into `rust` mode never binds the listener — `fetch_audio_source` and

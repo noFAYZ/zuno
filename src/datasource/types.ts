@@ -265,5 +265,5 @@ export interface LibrarySnapshot {
  */
 export type RustAudioSource =
   | { kind: "stream"; url: string; mimeType: string; cookie?: string }
-  | { kind: "offline"; trackId: string }
+  | { kind: "offline"; trackId: string; mimeType: string }
   | { kind: "file"; path: string };

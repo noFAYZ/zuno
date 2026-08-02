@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Player, Source};
 use serde::Serialize;
+use symphonia::core::io::MediaSource;
 use tauri::{AppHandle, Emitter};
 
 use crate::MediaBuffer;
@@ -137,6 +138,23 @@ impl Read for BufferReader {
             }
             std::thread::sleep(READ_POLL);
         }
+    }
+}
+
+/**
+ * Seekable and self-describing, so symphonia can probe a container it is still downloading.
+ *
+ * `byte_len` comes from the URL's own `clen` rather than from what has arrived — the demuxer
+ * uses it to locate the tail of a Matroska file, and answering with the current fill would
+ * point it at the middle of the download.
+ */
+impl MediaSource for BufferReader {
+    fn is_seekable(&self) -> bool {
+        true
+    }
+
+    fn byte_len(&self) -> Option<u64> {
+        self.state().ok().map(|(_, total, _)| total as u64)
     }
 }
 

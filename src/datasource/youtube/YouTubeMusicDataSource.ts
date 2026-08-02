@@ -5982,10 +5982,13 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     if (isTrackDownloaded(track.id)) {
-      return {
-        mimeType: track.mimeType ?? "audio/mp4",
-        rustSource: { kind: "offline", trackId: track.id },
-      };
+      const mimeType = track.mimeType ?? "audio/mp4";
+      /*
+       * The mime type travels with the id because it is what picks the decoder: a downloaded
+       * body is raw bytes on disk with no extension to read, and Opus needs libopus while
+       * everything else goes to rodio.
+       */
+      return { mimeType, rustSource: { kind: "offline", trackId: track.id, mimeType } };
     }
 
     const { url, mimeType, cookie } = await this.resolveStreamUrl(track);

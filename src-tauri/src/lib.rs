@@ -44,6 +44,7 @@ mod windows_media;
 
 mod audio;
 mod discord_rpc;
+mod opus_source;
 mod lastfm;
 
 // Keep the legacy service name so existing sign-in credentials survive the product rename.
@@ -3255,7 +3256,7 @@ enum NativeAudioSource {
     },
     /// A track already in the offline store.
     #[serde(rename_all = "camelCase")]
-    Offline { track_id: String },
+    Offline { track_id: String, mime_type: String },
     /// A file the user pointed at a music folder.
     #[serde(rename_all = "camelCase")]
     File { path: String },
@@ -3294,20 +3295,21 @@ fn open_native_audio_reader(
                 url,
                 track_id.to_string(),
                 cookie,
-                mime_type,
+                mime_type.clone(),
                 Arc::clone(&buffer),
                 ranges,
             ));
             Ok(NativeAudioReader {
                 reader: Box::new(audio::BufferReader::new(Arc::clone(&buffer))),
+                mime_type,
                 buffer: Some(buffer),
             })
         }
-        NativeAudioSource::Offline { track_id } => {
+        NativeAudioSource::Offline { track_id, mime_type } => {
             let path = offline_entry_path(app, &track_id)?;
             let file = File::open(&path)
                 .map_err(|error| cache_error(format!("offline read failed: {error}")))?;
-            Ok(NativeAudioReader { reader: Box::new(file), buffer: None })
+            Ok(NativeAudioReader { reader: Box::new(file), mime_type, buffer: None })
         }
         NativeAudioSource::File { path } => {
             let path = PathBuf::from(path);
@@ -3316,9 +3318,12 @@ fn open_native_audio_reader(
             if !path.is_file() || !is_local_audio_file(&path) {
                 return Err(cache_error("local audio file is unavailable."));
             }
+            // The extension is the only codec hint a local file carries; the same mapping
+            // `local_audio_read` hands the webview.
+            let mime_type = local_audio_mime_type(&path).to_string();
             let file = File::open(&path)
                 .map_err(|error| cache_error(format!("local audio read failed: {error}")))?;
-            Ok(NativeAudioReader { reader: Box::new(file), buffer: None })
+            Ok(NativeAudioReader { reader: Box::new(file), mime_type, buffer: None })
         }
     }
 }
@@ -3331,14 +3336,15 @@ fn open_native_audio_reader(
  * `PLAYBACK_FILL_LOCK` while doing it, so every refusal delayed the next real load.
  */
 struct NativeAudioReader {
-    reader: Box<dyn NativeAudioRead>,
+    /// `MediaSource` is `Read + Seek + Send + Sync` plus a length — exactly what symphonia's
+    /// probe needs and a superset of what rodio's decoder does, so one box serves both.
+    reader: Box<dyn symphonia::core::io::MediaSource>,
+    /// The declared codec, which is what decides *which* decoder gets the box.
+    mime_type: String,
     buffer: Option<Arc<Mutex<MediaBuffer>>>,
 }
 
-/// What rodio's decoder needs of a byte source. Named so the three cases above can be boxed
-/// into one type.
-trait NativeAudioRead: Read + std::io::Seek + Send + Sync {}
-impl<T: Read + std::io::Seek + Send + Sync> NativeAudioRead for T {}
+
 
 /**
  * Decodes a track onto a deck.
@@ -3360,11 +3366,26 @@ async fn native_audio_load(
     duration_sec: Option<f64>,
     standby: Option<bool>,
 ) -> Result<f64, CommandError> {
-    let NativeAudioReader { reader, buffer } = open_native_audio_reader(&app, &track_id, source)?;
+    let NativeAudioReader { reader, mime_type, buffer } =
+        open_native_audio_reader(&app, &track_id, source)?;
     let started_at = Instant::now();
 
     let decoded = tauri::async_runtime::spawn_blocking(move || {
         use rodio::Source as _;
+        /*
+         * Opus goes to libopus, everything else to rodio.
+         *
+         * Not a preference — symphonia has no Opus decoder at all, and rodio can only offer
+         * what symphonia implements. WebM/Opus is the majority of what YouTube serves at
+         * `high`, and the only audio offered for a large share of tracks, so this branch is
+         * most of playback rather than an edge case.
+         */
+        if opus_source::is_opus(&mime_type) {
+            return opus_source::OpusSource::new(reader, &mime_type).map(|source| {
+                let duration = source.total_duration().map(|value| value.as_secs_f64());
+                (Box::new(source) as audio::BoxedSource, duration)
+            });
+        }
         rodio::Decoder::new(reader)
             .map(|decoder| {
                 let duration = decoder.total_duration().map(|value| value.as_secs_f64());
@@ -4459,6 +4480,32 @@ mod tests {
     use std::time::Duration;
 
     /**
+     * Which decoder a track is sent to.
+     *
+     * The consequence of getting this wrong is not a fallback, it is a failed load: rodio
+     * cannot decode Opus at all, and libopus cannot read anything else. The `audio/mp4` case is
+     * the one that already worked when every WebM track was failing, so it is the one that must
+     * not start being routed to libopus.
+     */
+    #[test]
+    fn opus_routing_follows_the_declared_codec() {
+        use super::opus_source::is_opus;
+
+        // What YouTube actually serves at `high` — 13 of 14 resolves in the log that found this.
+        assert!(is_opus(r#"audio/webm; codecs="opus""#));
+        assert!(is_opus("audio/opus"), "a local .opus file");
+        assert!(is_opus("audio/webm"), "WebM carries no other audio codec worth guessing");
+        assert!(is_opus("AUDIO/WEBM; CODECS=\"OPUS\""), "the header case is not ours to assume");
+
+        assert!(!is_opus(r#"audio/mp4; codecs="mp4a.40.2""#), "AAC is rodio's");
+        assert!(!is_opus("audio/flac"));
+        assert!(!is_opus("audio/mpeg"));
+        // Ogg is Vorbis far more often than Opus, and rodio has a Vorbis decoder. An Opus
+        // stream in an `.ogg` wrapper is the one shape this deliberately misroutes.
+        assert!(!is_opus("audio/ogg"));
+    }
+
+    /**
      * The exact JSON `rustAudio.ts` puts on the wire.
      *
      * A cross-language boundary that neither `tsc` nor `cargo` can see across: TypeScript sends
@@ -4489,10 +4536,18 @@ mod tests {
         assert!(anonymous.is_ok(), "a missing cookie is a signed-out session, not an error");
 
         let offline = serde_json::from_str::<NativeAudioSource>(
-            r#"{"kind":"offline","trackId":"dQw4w9WgXcQ"}"#,
+            r#"{"kind":"offline","trackId":"dQw4w9WgXcQ","mimeType":"audio/webm; codecs=\"opus\""}"#,
         )
         .expect("offline source");
-        assert!(matches!(offline, NativeAudioSource::Offline { track_id } if track_id == "dQw4w9WgXcQ"));
+        // The mime type rides along because a downloaded body has no extension to read it from,
+        // and it is what decides whether libopus or rodio gets the file.
+        match offline {
+            NativeAudioSource::Offline { track_id, mime_type } => {
+                assert_eq!(track_id, "dQw4w9WgXcQ");
+                assert!(super::opus_source::is_opus(&mime_type));
+            }
+            _ => panic!("kind did not select the offline variant"),
+        }
 
         let file = serde_json::from_str::<NativeAudioSource>(
             r#"{"kind":"file","path":"C:\\Music\\song.flac"}"#,

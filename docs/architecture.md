@@ -39,7 +39,7 @@ flowchart TB
     RPC["Discord IPC"]
     LFM["Last.fm API"]
     SRV["127.0.0.1 media server"]
-    SND["symphonia decode + cpal output<br/>two decks"]
+    SND["symphonia demux + libopus/rodio decode<br/>cpal output, two decks"]
     WATCH["notify folder watcher"]
   end
 
