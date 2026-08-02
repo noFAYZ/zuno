@@ -1,0 +1,13 @@
+# libopus ships a CMakeLists that declares `cmake_minimum_required` below 3.5, and CMake 4
+# removed the compatibility shim for that — so a machine with a current CMake cannot configure
+# it at all:
+#
+#   CMake Error at CMakeLists.txt:1 (cmake_minimum_required):
+#     Compatibility with CMake < 3.5 has been removed from CMake.
+#
+# This is CMake's own documented escape hatch, and it is set here rather than in the workflows
+# because it is not a CI quirk: anyone with CMake 4 hits it, and a contributor should not have to
+# discover the flag from a build-script panic. Remove it when `audiopus_sys` updates the bundled
+# libopus, or when the crate stops vendoring one.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
