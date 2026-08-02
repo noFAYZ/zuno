@@ -3212,19 +3212,30 @@ async fn fill_media_buffer(
  * resolves a source into something readable and forwards the request.
  * ---------------------------------------------------------------------------------------- */
 
-/// Where a track's bytes come from. The three cases the player actually has.
+/**
+ * Where a track's bytes come from. The three cases the player actually has.
+ *
+ * Each variant carries its **own** `rename_all`. The container attribute renames the *variants*
+ * — which is what matches `kind: "stream"` — and does nothing at all to the fields inside them,
+ * so with only the outer one this asked the frontend for `mime_type` and rejected every load
+ * with "missing field `mime_type`". `rename_all_fields` would also work; this spells it out per
+ * variant so a serde downgrade cannot quietly take it away again.
+ */
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum NativeAudioSource {
     /// A signed googlevideo URL, decoded as it downloads.
+    #[serde(rename_all = "camelCase")]
     Stream {
         url: String,
         mime_type: String,
         cookie: Option<String>,
     },
     /// A track already in the offline store.
+    #[serde(rename_all = "camelCase")]
     Offline { track_id: String },
     /// A file the user pointed at a music folder.
+    #[serde(rename_all = "camelCase")]
     File { path: String },
 }
 
@@ -4382,10 +4393,63 @@ mod tests {
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
     };
     use super::audio::BufferReader;
+    use super::NativeAudioSource;
     use std::collections::HashMap;
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    /**
+     * The exact JSON `rustAudio.ts` puts on the wire.
+     *
+     * A cross-language boundary that neither `tsc` nor `cargo` can see across: TypeScript sends
+     * `mimeType`, and `#[serde(rename_all)]` on an *enum* renames its variants and not their
+     * fields, so every load was rejected with "missing field `mime_type`" while both sides
+     * compiled and every other check passed. The payloads below are copied from the invoke
+     * calls; keep them that way.
+     */
+    #[test]
+    fn native_audio_source_parses_what_the_frontend_sends() {
+        let stream = serde_json::from_str::<NativeAudioSource>(
+            r#"{"kind":"stream","url":"https://r1.googlevideo.com/videoplayback?clen=99","mimeType":"audio/webm; codecs=\"opus\"","cookie":"SAPISID=x"}"#,
+        )
+        .expect("stream source");
+        match stream {
+            NativeAudioSource::Stream { url, mime_type, cookie } => {
+                assert!(url.contains("googlevideo"));
+                assert_eq!(mime_type, "audio/webm; codecs=\"opus\"");
+                assert_eq!(cookie.as_deref(), Some("SAPISID=x"));
+            }
+            _ => panic!("kind did not select the stream variant"),
+        }
+
+        // The cookie is absent when the session is signed out, and absent must not mean invalid.
+        let anonymous = serde_json::from_str::<NativeAudioSource>(
+            r#"{"kind":"stream","url":"https://r1.googlevideo.com/videoplayback","mimeType":"audio/mp4"}"#,
+        );
+        assert!(anonymous.is_ok(), "a missing cookie is a signed-out session, not an error");
+
+        let offline = serde_json::from_str::<NativeAudioSource>(
+            r#"{"kind":"offline","trackId":"dQw4w9WgXcQ"}"#,
+        )
+        .expect("offline source");
+        assert!(matches!(offline, NativeAudioSource::Offline { track_id } if track_id == "dQw4w9WgXcQ"));
+
+        let file = serde_json::from_str::<NativeAudioSource>(
+            r#"{"kind":"file","path":"C:\\Music\\song.flac"}"#,
+        )
+        .expect("file source");
+        assert!(matches!(file, NativeAudioSource::File { path } if path.ends_with("song.flac")));
+
+        // snake_case is what the bug accepted; it must not be what the contract accepts.
+        assert!(
+            serde_json::from_str::<NativeAudioSource>(
+                r#"{"kind":"stream","url":"https://x/y","mime_type":"audio/mp4"}"#,
+            )
+            .is_err(),
+            "the wire format is camelCase and only camelCase",
+        );
+    }
 
     /**
      * The streaming reader the Rust decoder pulls through.
