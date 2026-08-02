@@ -41,6 +41,61 @@ pub(crate) fn is_opus(mime_type: &str) -> bool {
 }
 
 /**
+ * The container a stored body actually is, read from its own first bytes.
+ *
+ * For anything already on disk the declared mime type is not evidence. `Track.mimeType`
+ * describes what was resolved for *streaming*, and a row that came from a playlist listing
+ * carries none at all — so a downloaded track falls back to `audio/mp4` while the bytes on disk
+ * are very often Opus in WebM. That misroute sent the file to rodio, which parsed the Matroska
+ * fine and then had no Opus decoder to hand the packets to: "the format of the data has not been
+ * recognized", for a track that had downloaded perfectly.
+ *
+ * Rewinds before returning, so the caller hands the decoder a reader at the start.
+ * `None` means the bytes look like nothing recognised and the declared type is as good a guess
+ * as any.
+ */
+pub(crate) fn sniff_container_mime(
+    reader: &mut (impl std::io::Read + std::io::Seek),
+) -> std::io::Result<Option<&'static str>> {
+    let mut header = [0u8; 64];
+    let mut filled = 0;
+    while filled < header.len() {
+        match reader.read(&mut header[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    reader.seek(std::io::SeekFrom::Start(0))?;
+    Ok(container_mime_of(&header[..filled]))
+}
+
+/// The magic-number half of `sniff_container_mime`, split out so it can be tested on bytes.
+fn container_mime_of(header: &[u8]) -> Option<&'static str> {
+    if header.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        // Matroska. YouTube's WebM audio is always Opus, and a WebM carrying Vorbis instead is
+        // rare enough that failing loudly on it beats guessing the other way on every download.
+        return Some("audio/webm; codecs=\"opus\"");
+    }
+    if header.starts_with(b"OggS") {
+        // Ogg carries either, and only the codec header inside the first page says which.
+        return Some(if header.windows(8).any(|window| window == b"OpusHead") {
+            "audio/opus"
+        } else {
+            "audio/ogg"
+        });
+    }
+    if header.len() >= 12 && &header[4..8] == b"ftyp" {
+        return Some("audio/mp4");
+    }
+    if header.starts_with(b"fLaC") {
+        return Some("audio/flac");
+    }
+    None
+}
+
+/**
  * How long the track is, according to the container.
  *
  * `n_frames` is a count in whatever unit the container keeps time in — Matroska's default is
@@ -276,8 +331,70 @@ impl Source for OpusSource {
 
 #[cfg(test)]
 mod tests {
-    use super::container_duration;
+    use super::{container_duration, container_mime_of, is_opus, sniff_container_mime};
     use symphonia::core::units::TimeBase;
+
+    /// Byte literals spelled as numbers: the headers here are magic numbers, and writing them
+    /// as escaped strings makes them harder to check against a hex dump, not easier.
+    fn ogg_page(codec_header: &[u8]) -> Vec<u8> {
+        let mut page = b"OggS".to_vec();
+        page.extend_from_slice(&[0x00, 0x02, 0, 0, 0, 0, 0, 0]);
+        page.extend_from_slice(codec_header);
+        page
+    }
+
+    /**
+     * A stored body is routed by its own bytes, not by what something said it was.
+     *
+     * The case that found this: a downloaded track whose file began 1A 45 DF A3 — Matroska
+     * holding Opus — was declared `audio/mp4`, because `Track.mimeType` describes what was
+     * resolved for *streaming* and a row from a playlist listing carries none at all. rodio
+     * parsed the container happily and then had no Opus decoder for what was inside, so a
+     * download that was perfectly intact reported "the format of the data has not been
+     * recognized".
+     */
+    #[test]
+    fn a_stored_container_is_identified_by_its_own_bytes() {
+        let matroska = [0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81];
+        let sniffed = container_mime_of(&matroska).expect("matroska");
+        assert!(is_opus(sniffed), "WebM has to reach libopus whatever it was declared as");
+
+        // Ogg carries either codec; only the header inside the first page distinguishes them.
+        assert!(is_opus(
+            container_mime_of(&ogg_page(b"OpusHead")).expect("ogg opus")
+        ));
+        assert!(
+            !is_opus(container_mime_of(&ogg_page(&[0x01, b'v', b'o', b'r', b'b', b'i', b's']))
+                .expect("ogg vorbis")),
+            "rodio has a Vorbis decoder; libopus does not",
+        );
+
+        // The same mistake in reverse would send AAC to libopus, which cannot read it either.
+        let mut mp4 = vec![0, 0, 0, 0x20];
+        mp4.extend_from_slice(b"ftypM4A ");
+        assert!(!is_opus(container_mime_of(&mp4).expect("mp4")));
+
+        assert_eq!(container_mime_of(b"fLaC____"), Some("audio/flac"));
+        // Nothing recognised leaves the declared type standing rather than inventing one.
+        assert_eq!(container_mime_of(b"not a container at all"), None);
+        assert_eq!(container_mime_of(&[]), None);
+    }
+
+    /// Sniffing must leave the reader at the start, or the decoder gets a headless stream.
+    #[test]
+    fn sniffing_rewinds_the_reader() {
+        let mut body = vec![0x1A, 0x45, 0xDF, 0xA3];
+        body.extend(std::iter::repeat(0xAB).take(200));
+        let mut cursor = std::io::Cursor::new(body);
+
+        let sniffed = sniff_container_mime(&mut cursor).expect("sniff");
+        assert!(is_opus(sniffed.expect("matroska")));
+        assert_eq!(cursor.position(), 0, "the decoder must see the container header");
+
+        // Shorter than the sniff window: a short read is not a failure.
+        let mut tiny = std::io::Cursor::new(vec![0x1A, 0x45, 0xDF, 0xA3]);
+        assert!(sniff_container_mime(&mut tiny).expect("sniff").is_some());
+    }
 
     /**
      * A duration read through the container's time base, not by dividing by the sample rate.

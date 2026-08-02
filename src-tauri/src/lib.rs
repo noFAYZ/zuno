@@ -3307,9 +3307,13 @@ fn open_native_audio_reader(
         }
         NativeAudioSource::Offline { track_id, mime_type } => {
             let path = offline_entry_path(app, &track_id)?;
-            let file = File::open(&path)
+            let mut file = File::open(&path)
                 .map_err(|error| cache_error(format!("offline read failed: {error}")))?;
-            Ok(NativeAudioReader { reader: Box::new(file), mime_type, buffer: None })
+            Ok(NativeAudioReader {
+                mime_type: sniffed_mime(&mut file, mime_type, &track_id),
+                reader: Box::new(file),
+                buffer: None,
+            })
         }
         NativeAudioSource::File { path } => {
             let path = PathBuf::from(path);
@@ -3318,13 +3322,44 @@ fn open_native_audio_reader(
             if !path.is_file() || !is_local_audio_file(&path) {
                 return Err(cache_error("local audio file is unavailable."));
             }
-            // The extension is the only codec hint a local file carries; the same mapping
-            // `local_audio_read` hands the webview.
-            let mime_type = local_audio_mime_type(&path).to_string();
-            let file = File::open(&path)
+            // The extension is the only codec hint a local file carries, and it is a claim
+            // rather than a fact — the bytes below get the final say.
+            let declared = local_audio_mime_type(&path).to_string();
+            let mut file = File::open(&path)
                 .map_err(|error| cache_error(format!("local audio read failed: {error}")))?;
-            Ok(NativeAudioReader { reader: Box::new(file), mime_type, buffer: None })
+            let label = path.file_name().and_then(|name| name.to_str()).unwrap_or("file");
+            Ok(NativeAudioReader {
+                mime_type: sniffed_mime(&mut file, declared, label),
+                reader: Box::new(file),
+                buffer: None,
+            })
         }
+    }
+}
+
+/**
+ * The container a stored body really is, preferring its own bytes over what was declared.
+ *
+ * Only for things already on disk. A *stream* keeps its declared type: that came from the format
+ * selection which produced the very URL being fetched, so it cannot drift, and sniffing it would
+ * mean waiting on the network before choosing a decoder.
+ */
+fn sniffed_mime(
+    file: &mut File,
+    declared: String,
+    label: &str,
+) -> String {
+    match opus_source::sniff_container_mime(file) {
+        Ok(Some(sniffed)) if sniffed != declared => {
+            eprintln!(
+                "[internal][tauri][info] container sniffed {} declared={} actual={}",
+                label, declared, sniffed
+            );
+            sniffed.to_string()
+        }
+        Ok(_) => declared,
+        // Unreadable here means unreadable for the decoder too; let that report it.
+        Err(_) => declared,
     }
 }
 
