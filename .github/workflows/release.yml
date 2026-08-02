@@ -341,10 +341,16 @@ jobs:
     name: Publish to winget
     needs: [prepare, release]
     runs-on: ubuntu-latest
-    # winget is one distribution channel among several, and the action is pinned to `@main`, so
-    # it breaks without anything here changing — it has now failed two releases running while
-    # every artifact published fine. Failing the whole release for it also meant the AUR job
-    # below, which waits on this workflow succeeding, never ran at all.
+    # `winget-releaser` only *bumps* a package that already exists in microsoft/winget-pkgs; it
+    # cannot create one. `noFAYZ.Zuno` has never been submitted, so every run so far has stopped
+    # at "Package noFAYZ.Zuno does not exist in the winget-pkgs repository" — nothing to do with
+    # the release itself, which published fine each time.
+    #
+    # The initial submission is a one-off PR to microsoft/winget-pkgs; the manifest for it lives
+    # in `manifests/`. This step starts working on its own once that PR is merged.
+    #
+    # Non-fatal until then. winget is one channel among several, and failing the whole release
+    # for it also meant the AUR publish — which chains off this workflow succeeding — never ran.
     continue-on-error: true
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
