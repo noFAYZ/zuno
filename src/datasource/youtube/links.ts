@@ -79,9 +79,18 @@ function isYouTubeHost(hostname: string): boolean {
     || host === "youtu.be";
 }
 
-/** Video ids are 11 characters of the URL-safe base64 alphabet. */
-function isVideoId(value: string): boolean {
-  return /^[\w-]{11}$/.test(value);
+/**
+ * Video ids are 11 characters of the URL-safe base64 alphabet.
+ *
+ * Exported because it is also what decides whether a shelf row may become a *track*. An artist
+ * page mixes songs with shows, and a show's `id` is a browse id — `MPSP` wrapped around a `PL…`
+ * playlist id, 34 characters. Those were turned into tracks, and every Innertube client answered
+ * "This video is unavailable" when one was clicked, because the id had never named a video.
+ *
+ * Widened to accept a missing value so callers do not each repeat the same null check.
+ */
+export function isVideoId(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^[\w-]{11}$/.test(value);
 }
 
 /**

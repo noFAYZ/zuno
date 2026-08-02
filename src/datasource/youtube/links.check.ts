@@ -11,7 +11,7 @@
  */
 export {};
 
-import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
+import { isVideoId, looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import type { ResolvedLink } from "../types";
 
 function check(condition: boolean, message: string): void {
@@ -112,5 +112,27 @@ check(
   "text that merely mentions youtube is a search, not a link",
 );
 check(!looksLikeYouTubeLink("metro boomin"), "an ordinary query is a search");
+
+/*
+ * What may be treated as something that plays.
+ *
+ * The case that made this necessary: an artist page's popular-songs shelf mixes in podcast
+ * shows, whose id is a browse id rather than a video id. They were turned into tracks, and
+ * clicking one walked all three Innertube clients only to be told "This video is unavailable"
+ * by each — the id had never named a video.
+ */
+check(isVideoId("dQw4w9WgXcQ"), "an ordinary video id");
+check(isVideoId("_lMlsPQJs6U"), "leading underscore is in the alphabet");
+check(isVideoId("SOySR3DJO5Q"), "mixed case is in the alphabet");
+check(
+  !isVideoId("MPSPPLDfKAXSi6kUZChoCmv-rvfdEEfgZTFBzS"),
+  "a show's browse id is not a video id",
+);
+check(!isVideoId("MPREb_9nY3XYZ1234"), "an album browse id is not a video id");
+check(!isVideoId("PLDfKAXSi6kUZChoCmv"), "a playlist id is not a video id");
+check(!isVideoId("tooshort"), "ten characters is not eleven");
+check(!isVideoId("dQw4w9WgXcQ!"), "a character outside the alphabet disqualifies it");
+check(!isVideoId(""), "empty is not an id");
+check(!isVideoId(undefined), "absent is not an id");
 
 console.log("links.check.ts OK");

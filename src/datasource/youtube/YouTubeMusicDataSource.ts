@@ -51,7 +51,7 @@ import {
   unmetPrecondition,
 } from "./lyricsSources";
 import { getPreferredLyricsSourceId } from "../../internal/lyricsSourcePreference";
-import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
+import { isVideoId, looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
 import {
   getDownloadQuality,
@@ -1000,9 +1000,24 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   private toTrack(item: MusicItem): Track | null {
-    const id = item.id ?? item.endpoint?.payload?.videoId;
+    /*
+     * The endpoint wins over `item.id`.
+     *
+     * `item.id` is whatever the renderer happened to be keyed on — a video id for a song, a
+     * *browse* id for a show — while `endpoint.payload.videoId` only ever names the thing that
+     * plays. For an ordinary song the two hold the same value, so this changes nothing there;
+     * it changes the rows that were never playable in the first place.
+     */
+    const id = item.endpoint?.payload?.videoId ?? item.id;
     const title = this.getTitle(item);
-    if (!id || !title) return null;
+    /*
+     * A shape check as well as a presence check. An artist page's popular-songs shelf mixes in
+     * podcast shows whose id is `MPSPPL…`; those became tracks, and clicking one walked all
+     * three Innertube clients only to be told "This video is unavailable" by each. Dropping
+     * them here means they never reach a queue — `toTrack` already returns null for unusable
+     * items and every caller filters.
+     */
+    if (!isVideoId(id) || !title) return null;
     const viewCountText = this.getViewCountText(item);
     const album = this.getTrackAlbum(item);
 

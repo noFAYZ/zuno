@@ -2446,6 +2446,19 @@ const OFFLINE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 /// modest so a download does not starve playback of the same connection.
 const OFFLINE_CHUNK_CONCURRENCY: usize = 6;
 
+/**
+ * One playback fill at a time, process-wide.
+ *
+ * Not a rate limit — a correctness guard. googlevideo answers 403 on the later of two range
+ * requests that overlap on one session, so two tracks filling at once means the one being
+ * listened to loses its tail. See `fill_media_buffer`, which holds this for its whole run.
+ *
+ * Downloads (`fetch_audio_ranged`) deliberately stay outside it: they fan out six ways on
+ * purpose, they are a user-initiated bulk action rather than something a listener is waiting
+ * on, and that path has not shown this failure.
+ */
+static PLAYBACK_FILL_LOCK: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 /** Attempts per playback range before falling back. A 403 here is usually transient. */
 const PLAYBACK_RANGE_ATTEMPTS: usize = 3;
 /** Delay before retrying a refused range; doubled on each further attempt. */
@@ -3062,6 +3075,22 @@ async fn fill_media_buffer(
             guard.failed = true;
         }
     };
+
+    /*
+     * Held for the whole fill, both ranges and the fallback.
+     *
+     * `playback_ranges` removed the fan-out *within* a track after googlevideo was found to
+     * refuse ranges whenever several are in flight on one session — always the later ones,
+     * never the first. What it could not fix from where it sat is the fan-out *across* tracks:
+     * `warmNextTrack` starts the next track's fill the moment the current one loads, so two
+     * fills raced roughly 15 ms apart and the playing track's tail range came back 403. The
+     * whole-file fallback, issued while the other fill was still going, was refused in turn,
+     * and the track died.
+     *
+     * The warmed track waits, which is the right way round: it is an optimisation, and the one
+     * making sound is not.
+     */
+    let _fill_permit = PLAYBACK_FILL_LOCK.acquire().await;
 
     let Ok(request_url) = url::Url::parse(&url) else {
         fail(&buffer);
