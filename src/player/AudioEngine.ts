@@ -124,6 +124,15 @@ function shouldUseNativeAudio(): boolean {
  */
 let rustEndedRouted = false;
 
+/*
+ * The media server is released once per switch to the Rust engine, not once per track.
+ *
+ * Cleared again by `loadNativeAudio`, because that path is what refills the server — switching
+ * back and forth has to release each time, and a flag that only ever latched would leak the
+ * bodies of every track played after the first return trip.
+ */
+let mediaServerReleased = false;
+
 function routeRustEnded(): void {
   if (rustEndedRouted) return;
   rustEndedRouted = true;
@@ -265,7 +274,7 @@ export class AudioEngine {
         throw new Error("Rust playback requires a resolved audio source.");
       }
       this.releaseIframePlayer();
-      this.releaseNativeAudio();
+      // `loadRustAudio` releases the `<audio>` element itself, so both entry points get it.
       await this.loadRustAudio(videoId, rustSource, durationSec ?? 0);
       return;
     }
@@ -851,6 +860,25 @@ export class AudioEngine {
   ): Promise<void> {
     const requestId = ++this.loadRequestId;
     routeRustEnded();
+    /*
+     * Both entry points come through here, and this one has to run before the media server is
+     * released: the element it tears down is the only thing that could still be reading from
+     * the server, and clearing the bodies underneath a live range request would 404 the song
+     * that is playing.
+     */
+    this.releaseNativeAudio();
+    if (!mediaServerReleased) {
+      mediaServerReleased = true;
+      void rustAudio.releaseMediaServer()
+        .then((released) => {
+          if (released > 0) logInternalInfo("AudioEngine media server released", { released });
+        })
+        .catch((error: unknown) => {
+          // Nothing depends on this landing — it reclaims memory, it does not enable playback.
+          mediaServerReleased = false;
+          rustAudio.warn("AudioEngine media server release failed", error);
+        });
+    }
 
     // Dropping the standby first: it holds a decoded song, and a load that is not a transition
     // means whatever was queued behind the old track is no longer next.
@@ -901,6 +929,9 @@ export class AudioEngine {
     sourceUrl?: string,
   ): Promise<void> {
     const requestId = ++this.loadRequestId;
+    // This is the path that publishes bodies to the media server, so a later switch back to the
+    // Rust engine has something to release again.
+    mediaServerReleased = false;
     this.releaseNativeAudio();
 
     const bytes = audioData ? new Uint8Array(audioData) : null;

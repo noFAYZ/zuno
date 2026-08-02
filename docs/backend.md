@@ -225,9 +225,19 @@ always use `offline_audio_save` below.
 | `native_audio_transition` | `(track_id, fade_ms) -> bool` | Swaps to the standby deck. `fade_ms` of 0 is the gapless case; above 0 both decks play and their volumes ramp past each other. False means nothing was preloaded |
 | `native_audio_has_standby` | `(track_id) -> bool` | |
 | `native_audio_drop_standby` | `()` | |
+| `media_server_release` | `() -> usize` | Drops every body the media server holds, and returns how many. Called once on the first Rust load, after the `<audio>` element is torn down |
 
 `NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
 `file` (a path, re-validated here rather than trusted from the frontend).
+
+**The media server is not needed on this path at all.** `media_server()` is lazy, so an app that
+launches straight into `rust` mode never binds the listener — `fetch_audio_source` and
+`offline_audio_source` are the only callers and neither runs. Switching *into* `rust` mid-session
+is the case that matters, and `media_server_release` handles it: up to `MEDIA_SERVER_MAX_ITEMS`
+whole songs are dropped at the first Rust load, once the `<audio>` element that could still be
+range-requesting them is gone. The listener thread and its port stay — reclaiming those means the
+`OnceLock` has to become something emptiable *and* restartable, because the other two engines
+still need the server.
 
 Three things are load-bearing:
 

@@ -494,9 +494,11 @@ Recorded so nobody re-derives them:
   pitch for free via `preservesPitch`. Marked `ponytail:` at `native_audio_set_rate`; the fix is a
   time-stretcher between the decoder and the sink.
 - `MediaServer` — the loopback `TcpListener`, `MEDIA_SERVER_MAX_ITEMS`, `Cache-Control: no-store`
-  and `parse_media_range` — exists only to hand bytes to an `<audio>` element. Once `rust` is the
-  default and the other two engines go, all of it and `fetch_audio_source` go with them.
-  `MediaBuffer` stays: the Rust decoder reads through it.
+  and `parse_media_range` — exists only to hand bytes to an `<audio>` element. In `rust` mode it is
+  never started from cold and `media_server_release` drops its bodies when switched into
+  mid-session, so what remains resident is one thread parked in `accept()`. Deleting the rest waits
+  on `rust` becoming the only engine; `fetch_audio_source` goes with it. `MediaBuffer` stays — the
+  Rust decoder reads through it.
 - `app.security.csp` can only be tightened once the IFrame path is gone; the `rust` engine loads
   nothing from `youtube.com` at runtime, so it is the precondition rather than the change.
 - `App.tsx` is 2156 lines with ~30 `useEffect` blocks, some at zero indentation — still the

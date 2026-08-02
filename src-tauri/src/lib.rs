@@ -2154,6 +2154,44 @@ fn media_server() -> Result<&'static MediaServer, CommandError> {
     })
 }
 
+/**
+ * Drops every audio body the media server is holding.
+ *
+ * What it costs to leave running is the map, not the socket: up to `MEDIA_SERVER_MAX_ITEMS`
+ * whole songs, megabytes each, kept resident so an `<audio>` element can re-request a range.
+ * The Rust engine reads through `MediaBuffer` in-process and never asks the server for
+ * anything, so once it takes over those bodies are unreachable as well as unused.
+ *
+ * ponytail: the listener thread and its loopback port stay. Reclaiming them means turning the
+ * `OnceLock` into a lock that can be emptied and teaching the accept loop to stop, and the
+ * server would then have to be able to *restart* — the other two engines still need it. One
+ * thread parked in `accept()` is not worth that; the megabytes were the point.
+ *
+ * Returns how many entries were dropped. Zero is the ordinary answer: in `rust` mode from a
+ * cold start `media_server()` is never called, so there is nothing to release.
+ */
+#[tauri::command]
+fn media_server_release() -> Result<usize, CommandError> {
+    let Some(server) = MEDIA_SERVER.get() else {
+        return Ok(0);
+    };
+    let mut items = server.items.lock().map_err(|_| CommandError {
+        message: "media server cache lock poisoned".into(),
+    })?;
+
+    let released = items.len();
+    if released > 0 {
+        /*
+         * Safe against a request already in flight: `handle_media_request` clones the `Arc`
+         * before it reads, so a range being served finishes against the bytes it started with
+         * rather than finding an empty map.
+         */
+        items.clear();
+        eprintln!("[internal][tauri][info] media_server_release entries={released}");
+    }
+    Ok(released)
+}
+
 fn handle_media_request(
     mut stream: std::net::TcpStream,
     items: Arc<Mutex<HashMap<String, MediaItem>>>,
@@ -4270,6 +4308,7 @@ pub fn run() {
             native_audio_transition,
             native_audio_has_standby,
             native_audio_drop_standby,
+            media_server_release,
             proxy_http_request,
             load_youtube_music_cookie,
             sign_in_youtube_music,

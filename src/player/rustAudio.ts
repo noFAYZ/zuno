@@ -132,6 +132,20 @@ export function dropStandby(): Promise<void> {
   return invoke("native_audio_drop_standby");
 }
 
+/**
+ * Drops the audio bodies the local media server is holding.
+ *
+ * Not strictly a Rust-engine call, but this is its only caller: the media server exists to feed
+ * an `<audio>` element, and the Rust engine is the one path that has none. Lives here rather
+ * than in a module of its own because one invoke does not need one.
+ *
+ * Resolves with how many bodies were dropped — zero when the app launched straight into the
+ * Rust engine, because the server is lazy and was never started.
+ */
+export function releaseMediaServer(): Promise<number> {
+  return invoke<number>("media_server_release");
+}
+
 export function getCurrentTime(): number {
   return positionSec;
 }
