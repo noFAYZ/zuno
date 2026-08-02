@@ -231,7 +231,11 @@ always use `offline_audio_save` below.
 
 `NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
 `file` (a path, re-validated here rather than trusted from the frontend). Each carries a mime
-type, because that is what picks the decoder — a downloaded body has no extension to read it from.
+type, because that is what picks the decoder — but for anything already on disk the *bytes* win:
+`sniff_container_mime` reads the first 64 and rewinds. `Track.mimeType` describes what was
+resolved for streaming and a row from a playlist listing has none at all, so a downloaded Opus
+file arrived declared `audio/mp4` and went to rodio, which parsed the Matroska and then had no
+Opus decoder for what was inside.
 
 **Opus is not optional.** symphonia has no Opus decoder in 0.5 — not a feature flag, the codec is
 absent — and YouTube serves `audio/webm; codecs="opus"` for the large majority of tracks at

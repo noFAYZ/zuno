@@ -488,8 +488,12 @@ Recorded so nobody re-derives them:
   broke, which is the proof it is inert.
 - Gapless and crossfade silently do nothing in `native` audio-engine mode — they ride the standby
   IFrame deck, which that mode has no equivalent of. The Settings copy says so, but nothing in the
-  code prevents the combination. **`rust` mode is the fix**: it has two real decks and mixes them,
-  so `usesPreloadDeck()` admits it alongside `iframe`. `native` is what is left over.
+  code prevents the combination. **`rust` mode is the fix**: it has two real decks and mixes
+  them, and unlike the IFrame pair they open whatever they are handed — a signed URL, a file in
+  the offline store, a path on disk — so a downloaded album is gapless too. `player/preloadDeck.ts`
+  holds the rule and `preloadDeck.check.ts` pins it: the IFrame deck must keep excluding anything
+  read from disk, because it resolves its own stream from a video id and would fetch the online
+  copy of a track the user downloaded on purpose.
 - Playback rate on the `rust` engine resamples, so it transposes — the `<audio>` element corrected
   pitch for free via `preservesPitch`. Marked `ponytail:` at `native_audio_set_rate`; the fix is a
   time-stretcher between the decoder and the sink.

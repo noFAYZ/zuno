@@ -6,6 +6,8 @@ import { Queue } from "./Queue";
 import { recordPlay } from "./playHistory";
 import { computeQueueWindow } from "./queueWindow";
 import { getOfflineTrack, isTrackDownloaded } from "./offlineStore";
+import { hasPreloadDeck } from "./preloadDeck";
+import { getAudioEngineMode } from "../ui/settings/audioEngine";
 import { DiscordRpcService } from "./DiscordRPC";
 import {
   MAX_CROSSFADE_SEC,
@@ -1146,6 +1148,13 @@ export class PlayerController {
           trackId: track.id,
           durationMs: Math.round(performance.now() - startedAt),
         });
+        /*
+         * Warm from here too, or a local playlist never gets a second track onto the standby
+         * deck and every gapless handover it should have had is a gap instead. This branch used
+         * to return before the call below because nothing on the local path could be warmed —
+         * the Rust decks changed that.
+         */
+        this.warmNextTrack();
         return;
       }
       /*
@@ -1283,8 +1292,21 @@ export class PlayerController {
     if (!this.audioEngine.usesNativeAudio()) return;
     if (!this.dataSource.getStreamData) return;
     if (this.warmingStream) return;
-    // Local files and downloads are read from disk; there is no network wait to hide.
-    if (next.source === "local" || isTrackDownloaded(next.id)) return;
+    /*
+     * A track already on disk has no network wait to hide, which is all warming ever did on the
+     * `<audio>` engine — so it stays excluded there.
+     *
+     * On the Rust engine warming is not about the network. It decodes the next track onto the
+     * standby deck, and that is the whole mechanism behind gapless. Skipping it here is what
+     * left a downloaded album with a gap between every track while a streamed one played
+     * through seamlessly, which is exactly backwards.
+     */
+    if (
+      (next.source === "local" || isTrackDownloaded(next.id))
+      && !this.audioEngine.usesRustAudio()
+    ) {
+      return;
+    }
     if (this.warmedStream?.trackId === next.id) return;
 
     const getStreamData = this.dataSource.getStreamData.bind(this.dataSource);
@@ -1328,19 +1350,12 @@ export class PlayerController {
     return data;
   }
 
-  /**
-   * Whether a track can be handed to a standby deck rather than loaded on the spot.
-   *
-   * Two engines have one: the IFrame pair, and the Rust pair. The `<audio>` engine does not,
-   * which is why gapless and crossfade quietly did nothing whenever it was selected.
-   *
-   * Offline and local files are excluded either way — they are read from disk with no load gap
-   * worth hiding, and handing one to the IFrame deck would play the streamed version of a track
-   * the user downloaded on purpose.
-   */
+  /** Whether a track can be handed to a standby deck rather than loaded on the spot. */
   private usesPreloadDeck(track: Track): boolean {
-    if (track.source === "local" || isTrackDownloaded(track.id)) return false;
-    return this.audioEngine.usesRustAudio() || !this.audioEngine.usesNativeAudio();
+    return hasPreloadDeck(getAudioEngineMode(), {
+      isLocal: track.source === "local",
+      isDownloaded: isTrackDownloaded(track.id),
+    });
   }
 
   /**
