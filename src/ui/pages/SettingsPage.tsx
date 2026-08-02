@@ -9,6 +9,14 @@ import {
 import { Switch } from "@/components/motion/switch";
 import { RangeSlider } from "@/components/motion/range-slider";
 import {
+  EQUALIZER_BANDS_HZ,
+  EQUALIZER_MAX_DB,
+  EQUALIZER_PRESETS,
+  isEqualizerFlat,
+  setEqualizer,
+  useEqualizer,
+} from "../settings/equalizer";
+import {
   MAX_CROSSFADE_SEC,
   setCrossfadeSec,
   setGaplessEnabled,
@@ -227,6 +235,130 @@ function formatSessionAge(confirmedAt: number | null): string {
  */
 const SETTINGS_FIELD =
   "min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60";
+
+/**
+ * The ten-band equaliser.
+ *
+ * A component of its own rather than a run of `SettingRow`s because the bands are one control,
+ * not eleven: they share a scale, a reset and a set of presets, and reading one slider only
+ * means anything next to its neighbours.
+ *
+ * Sliders are horizontal, stacked. The usual picture of an equaliser is vertical, but that would
+ * mean a second slider component built to be rotated, and the frequency and the gain read more
+ * clearly written out than inferred from a bar's height.
+ */
+function EqualizerSettings({ engineMode }: { engineMode: AudioEngineMode }) {
+  const equalizer = useEqualizer();
+  // Only the Rust engine has the samples. A track that fell back to the YouTube player plays
+  // unequalised no matter what these say, which the note below is there to admit.
+  const available = engineMode === "rust";
+  const flat = isEqualizerFlat(equalizer);
+
+  const setBand = (index: number, gain: number) => {
+    const bandsDb = equalizer.bandsDb.slice();
+    bandsDb[index] = gain;
+    setEqualizer({ ...equalizer, bandsDb });
+  };
+
+  const activePreset = EQUALIZER_PRESETS.find(
+    (preset) =>
+      preset.settings.preampDb === equalizer.preampDb
+      && preset.settings.bandsDb.every((gain, index) => gain === equalizer.bandsDb[index]),
+  );
+
+  return (
+    <div className={cn("flex flex-col gap-3 pt-1", !available && "opacity-50")}>
+      <div className="flex items-baseline justify-between gap-4">
+        <span className="text-sm font-medium text-foreground">Equaliser</span>
+        <span className="text-xs text-muted-foreground">
+          {available
+            ? flat
+              ? "Off"
+              : `${equalizer.preampDb > 0 ? "+" : ""}${equalizer.preampDb} dB preamp`
+            : "Needs the Rust playback method"}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {EQUALIZER_PRESETS.map((preset) => (
+          <button
+            key={preset.name}
+            type="button"
+            disabled={!available}
+            onClick={() => setEqualizer(preset.settings)}
+            className={cn(
+              "rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              activePreset?.name === preset.name
+                ? "bg-primary text-primary-foreground"
+                : "text-foreground hover:bg-card",
+            )}
+          >
+            {preset.name}
+          </button>
+        ))}
+      </div>
+
+      <EqualizerBand
+        label="Preamp"
+        value={equalizer.preampDb}
+        disabled={!available}
+        onChange={(preampDb) => setEqualizer({ ...equalizer, preampDb })}
+      />
+
+      <div className="h-px bg-border" />
+
+      {EQUALIZER_BANDS_HZ.map((hz, index) => (
+        <EqualizerBand
+          key={hz}
+          label={hz >= 1000 ? `${hz / 1000}k` : String(hz)}
+          value={equalizer.bandsDb[index]}
+          disabled={!available}
+          onChange={(gain) => setBand(index, gain)}
+        />
+      ))}
+
+      <p className="px-1 text-xs text-muted-foreground">
+        Applies immediately, to the track playing. A limiter sits after the bands, so a heavy
+        boost is held back rather than clipped — lower the preamp to hear the difference instead.
+      </p>
+    </div>
+  );
+}
+
+function EqualizerBand({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        {label}
+      </span>
+      <RangeSlider
+        className="min-w-0 flex-1"
+        value={value}
+        min={-EQUALIZER_MAX_DB}
+        max={EQUALIZER_MAX_DB}
+        step={1}
+        showTicks={false}
+        disabled={disabled}
+        onValueChange={onChange}
+        aria-label={`${label} gain in decibels`}
+      />
+      <span className="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        {value > 0 ? "+" : ""}
+        {value} dB
+      </span>
+    </div>
+  );
+}
 
 /**
  * One settings row: label and description on the left, control on the right.
@@ -1826,6 +1958,8 @@ export function SettingsPage({
             <p className="px-1 text-xs text-muted-foreground">
               Applies from the next track.
             </p>
+
+            <EqualizerSettings engineMode={audioEngineMode} />
 
             <SettingToggle
               title="Resolve streams as your account"

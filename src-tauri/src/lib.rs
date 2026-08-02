@@ -44,6 +44,7 @@ mod windows_media;
 
 mod audio;
 mod discord_rpc;
+mod equalizer;
 mod opus_source;
 mod lastfm;
 
@@ -3406,7 +3407,6 @@ async fn native_audio_load(
     let started_at = Instant::now();
 
     let decoded = tauri::async_runtime::spawn_blocking(move || {
-        use rodio::Source as _;
         /*
          * Opus goes to libopus, everything else to rodio.
          *
@@ -3416,16 +3416,10 @@ async fn native_audio_load(
          * most of playback rather than an edge case.
          */
         if opus_source::is_opus(&mime_type) {
-            return opus_source::OpusSource::new(reader, &mime_type).map(|source| {
-                let duration = source.total_duration().map(|value| value.as_secs_f64());
-                (Box::new(source) as audio::BoxedSource, duration)
-            });
+            return opus_source::OpusSource::new(reader, &mime_type).map(equalized);
         }
         rodio::Decoder::new(reader)
-            .map(|decoder| {
-                let duration = decoder.total_duration().map(|value| value.as_secs_f64());
-                (Box::new(decoder) as audio::BoxedSource, duration)
-            })
+            .map(equalized)
             .map_err(|error| format!("audio decode failed: {error}"))
     })
     .await
@@ -3472,6 +3466,43 @@ async fn native_audio_load(
         started_at.elapsed().as_millis()
     );
     Ok(duration)
+}
+
+/**
+ * Puts the equaliser and a limiter between a decoded stream and its deck.
+ *
+ * The limiter is not decoration. Ten bands boosted 12 dB is far more headroom than a normalised
+ * track has, and without it the sum clips into distortion that sounds like a broken decoder
+ * rather than like an equaliser set too high. rodio ships one, so this is a line.
+ *
+ * The duration is read *before* wrapping: it is what the caller reports back to the frontend,
+ * and reading it through two adapters is one more place for it to go missing.
+ */
+fn equalized<S>(source: S) -> (audio::BoxedSource, Option<f64>)
+where
+    S: rodio::Source + Send + 'static,
+{
+    use rodio::Source as _;
+    let duration = source.total_duration().map(|value| value.as_secs_f64());
+    let shaped = equalizer::EqualizedSource::new(source).limit(rodio::source::LimitSettings::new());
+    (Box::new(shaped) as audio::BoxedSource, duration)
+}
+
+/// The ten band gains and the preamp, in dB. Applies to whatever is playing, immediately.
+#[tauri::command]
+fn native_audio_set_equalizer(preamp_db: f32, bands_db: Vec<f32>) -> Result<(), CommandError> {
+    if bands_db.len() != equalizer::BAND_COUNT {
+        return Err(cache_error(format!(
+            "equaliser expects {} bands, got {}",
+            equalizer::BAND_COUNT,
+            bands_db.len()
+        )));
+    }
+    let mut values =
+        equalizer::EqualizerValues { preamp_db, bands_db: [0.0; equalizer::BAND_COUNT] };
+    values.bands_db.copy_from_slice(&bands_db);
+    equalizer::set_values(values);
+    Ok(())
 }
 
 #[tauri::command]
@@ -4463,6 +4494,7 @@ pub fn run() {
             native_audio_transition,
             native_audio_has_standby,
             native_audio_drop_standby,
+            native_audio_set_equalizer,
             media_server_release,
             proxy_http_request,
             load_youtube_music_cookie,

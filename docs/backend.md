@@ -13,6 +13,7 @@ See [architecture.md](./architecture.md) for the system view.
 | `lib.rs` | ~3940 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
 | `audio.rs` | ~460 | The native engine: two rodio decks, the crossfade ramp, the position tick, and the blocking reader that lets symphonia decode a body still downloading |
 | `opus_source.rs` | ~250 | Opus playback — symphonia demuxes the WebM/Ogg container, libopus decodes the packets, the result is a rodio `Source` |
+| `equalizer.rs` | ~300 | Ten-band graphic EQ: a cascade of peaking biquads between the decoder and the deck |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -227,6 +228,7 @@ always use `offline_audio_save` below.
 | `native_audio_transition` | `(track_id, fade_ms) -> bool` | Swaps to the standby deck. `fade_ms` of 0 is the gapless case; above 0 both decks play and their volumes ramp past each other. False means nothing was preloaded |
 | `native_audio_has_standby` | `(track_id) -> bool` | |
 | `native_audio_drop_standby` | `()` | |
+| `native_audio_set_equalizer` | `(preamp_db, bands_db: Vec<f32>)` | Ten gains in dB, applied to whatever is playing |
 | `media_server_release` | `() -> usize` | Drops every body the media server holds, and returns how many. Called once on the first Rust load, after the `<audio>` element is torn down |
 
 `NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
@@ -251,6 +253,27 @@ are reconstructed against samples from somewhere else and arrive as noise.
 links **ALSA** on Linux (`libasound2-dev` / `alsa-lib`). Both are in `ci.yml`, `release.yml` and
 the AUR PKGBUILD. On Windows, cmake ships with the Visual Studio Build Tools but is not on `PATH`
 by default.
+
+### Equaliser (`equalizer.rs`)
+
+Peaking biquads at the ten ISO octave centres, direct form I, one filter chain per channel —
+sharing one across an interleaved stream would filter left against right. `EqualizedSource` wraps
+the decoder, so it applies to both decks and a crossfade stays consistent.
+
+- **Settings are process-global, not per-source.** A slider has to move the track *playing*, and
+  during a crossfade two decks have to agree. A source checks an `AtomicU64` generation per sample
+  and only takes the lock when it changed; locking per sample would put a mutex in the audio path.
+- **Direct form I** because its state is input/output history, which stays well behaved when the
+  coefficients change under it — and here they change mid-note whenever a slider moves.
+  `retune` swaps coefficients without touching that history, so there is no click.
+- **Flat is bypassed**, not run at unity.
+- **A limiter follows the bands** (`rodio::Source::limit`). Ten bands at +12 dB is far more than a
+  normalised track's headroom; without it the sum clips into something that sounds like a broken
+  decoder. Presets carry a negative preamp for the same reason.
+- Rust holds the values in memory only. `hydrateEqualizer` pushes the stored curve down at boot,
+  or the equaliser silently does nothing until a slider is touched.
+- **Only the Rust engine has it.** A track that fell back to the IFrame deck plays unequalised;
+  the settings section says so rather than leaving it to be discovered.
 
 **The media server is not needed on this path at all.** `media_server()` is lazy, so an app that
 launches straight into `rust` mode never binds the listener — `fetch_audio_source` and

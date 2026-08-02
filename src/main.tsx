@@ -16,6 +16,7 @@ import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
 import { hydrateTraySettings } from "./ui/settings/tray";
 import { hydrateAudioQualitySettings } from "./internal/audioQuality";
 import { hydrateAudioEngineMode } from "./ui/settings/audioEngine";
+import { hydrateEqualizer } from "./ui/settings/equalizer";
 import { hydrateYouTubeAccountSettings } from "./ui/settings/youtubeAccount";
 import { notifyLocalPlaylistsChanged, syncLocalAudioWatcher } from "./player/localPlaylists";
 import { listen } from "@tauri-apps/api/event";
@@ -59,6 +60,8 @@ void Promise.all([
   hydrateTraySettings(),
   hydrateAudioQualitySettings(),
   hydrateAudioEngineMode(),
+  // Rust starts flat every launch, so the stored curve has to be pushed back down.
+  hydrateEqualizer(),
   hydrateYouTubeAccountSettings(),
   hydrateLastFmSettings(),
   hydrateDiscordSettings(),
