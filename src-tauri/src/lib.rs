@@ -3109,7 +3109,17 @@ async fn fill_media_buffer(
             let client = client.clone();
             let url = url.clone();
             let cookie = cookie.clone();
+            let abandoned = Arc::clone(&buffer);
             async move {
+                /*
+                 * Checked here rather than between chunks because `buffered(1)` starts the next
+                 * request as soon as it is polled — by the time the outer loop could look, the
+                 * range is already in flight. `failed` is set by whoever gave up on the body:
+                 * the fill itself, or a decode that could not use it.
+                 */
+                if abandoned.lock().map(|guard| guard.failed).unwrap_or(true) {
+                    return Err((index, cache_error("fill abandoned")));
+                }
                 /*
                  * Retried before it is given up on. A 403 on a range is usually transient —
                  * googlevideo throttling rather than a URL that has gone bad — and abandoning
@@ -3171,6 +3181,18 @@ async fn fill_media_buffer(
                 }
             }
             Err((index, error)) => {
+                /*
+                 * An abandoned fill must not fall back — the fallback downloads the *whole*
+                 * body, which is precisely the work being called off. Only a genuine refusal
+                 * gets the retry below.
+                 */
+                if buffer.lock().map(|guard| guard.failed).unwrap_or(true) {
+                    eprintln!(
+                        "[internal][tauri][info] fill_media_buffer abandoned track_id={}",
+                        track_id
+                    );
+                    return;
+                }
                 /*
                  * One refused range is not a dead track.
                  *
@@ -3250,8 +3272,9 @@ enum NativeAudioSource {
  */
 fn open_native_audio_reader(
     app: &tauri::AppHandle,
+    track_id: &str,
     source: NativeAudioSource,
-) -> Result<Box<dyn NativeAudioRead>, CommandError> {
+) -> Result<NativeAudioReader, CommandError> {
     match source {
         NativeAudioSource::Stream {
             url,
@@ -3269,19 +3292,22 @@ fn open_native_audio_reader(
             let buffer = Arc::new(Mutex::new(MediaBuffer::pending(total, ranges.len())));
             tauri::async_runtime::spawn(fill_media_buffer(
                 url,
-                String::new(),
+                track_id.to_string(),
                 cookie,
                 mime_type,
                 Arc::clone(&buffer),
                 ranges,
             ));
-            Ok(Box::new(audio::BufferReader::new(buffer)))
+            Ok(NativeAudioReader {
+                reader: Box::new(audio::BufferReader::new(Arc::clone(&buffer))),
+                buffer: Some(buffer),
+            })
         }
         NativeAudioSource::Offline { track_id } => {
             let path = offline_entry_path(app, &track_id)?;
             let file = File::open(&path)
                 .map_err(|error| cache_error(format!("offline read failed: {error}")))?;
-            Ok(Box::new(file))
+            Ok(NativeAudioReader { reader: Box::new(file), buffer: None })
         }
         NativeAudioSource::File { path } => {
             let path = PathBuf::from(path);
@@ -3292,9 +3318,21 @@ fn open_native_audio_reader(
             }
             let file = File::open(&path)
                 .map_err(|error| cache_error(format!("local audio read failed: {error}")))?;
-            Ok(Box::new(file))
+            Ok(NativeAudioReader { reader: Box::new(file), buffer: None })
         }
     }
+}
+
+/**
+ * A reader, plus the buffer behind it when one is still filling.
+ *
+ * The buffer comes back so a *failed* decode can abandon the download. Without it a track whose
+ * codec symphonia cannot handle still pulled its whole body over the network — and, worse, held
+ * `PLAYBACK_FILL_LOCK` while doing it, so every refusal delayed the next real load.
+ */
+struct NativeAudioReader {
+    reader: Box<dyn NativeAudioRead>,
+    buffer: Option<Arc<Mutex<MediaBuffer>>>,
 }
 
 /// What rodio's decoder needs of a byte source. Named so the three cases above can be boxed
@@ -3322,10 +3360,10 @@ async fn native_audio_load(
     duration_sec: Option<f64>,
     standby: Option<bool>,
 ) -> Result<f64, CommandError> {
-    let reader = open_native_audio_reader(&app, source)?;
+    let NativeAudioReader { reader, buffer } = open_native_audio_reader(&app, &track_id, source)?;
     let started_at = Instant::now();
 
-    let (decoded, decoded_duration) = tauri::async_runtime::spawn_blocking(move || {
+    let decoded = tauri::async_runtime::spawn_blocking(move || {
         use rodio::Source as _;
         rodio::Decoder::new(reader)
             .map(|decoder| {
@@ -3335,8 +3373,29 @@ async fn native_audio_load(
             .map_err(|error| format!("audio decode failed: {error}"))
     })
     .await
-    .map_err(|error| cache_error(format!("audio decode task failed: {error}")))?
-    .map_err(cache_error)?;
+    .map_err(|error| cache_error(format!("audio decode task failed: {error}")))?;
+
+    /*
+     * A decode that failed has no reader left, so the fill behind it is downloading a body
+     * nobody will ever read. Marking the buffer stops it at its next range and, more to the
+     * point, gives up the fill permit — otherwise a run of undecodable tracks queues a run of
+     * pointless downloads in front of the next one that would have played.
+     */
+    let (decoded, decoded_duration) = match decoded {
+        Ok(decoded) => decoded,
+        Err(message) => {
+            if let Some(buffer) = &buffer {
+                if let Ok(mut guard) = buffer.lock() {
+                    guard.failed = true;
+                }
+            }
+            eprintln!(
+                "[internal][tauri][warn] native_audio_load decode failed track_id={} error={}",
+                track_id, message
+            );
+            return Err(cache_error(message));
+        }
+    };
 
     let duration = audio::request(&state, |reply| audio::Command::Load {
         track_id: track_id.clone(),
