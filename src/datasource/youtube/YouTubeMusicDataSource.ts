@@ -63,6 +63,7 @@ import {
   usesAuthenticatedStreaming,
   usesYouTubeScrobbling,
 } from "../../ui/settings/youtubeAccount";
+import { usesRustAudioEngine } from "../../ui/settings/audioEngine";
 import {
   getLiveCookie,
   notifyAuthRejected,
@@ -5863,6 +5864,10 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   async getStreamData(track: Track): Promise<StreamData> {
+    if (usesRustAudioEngine()) {
+      return this.getRustStreamData(track);
+    }
+
     if (track.source === "local") {
       if (!track.localPath) {
         throw new Error("Local track path is missing.");
@@ -5937,6 +5942,46 @@ export class YouTubeMusicDataSource extends DataSource {
     return {
       mimeType: payload.mimeType,
       sourceUrl: payload.url,
+    };
+  }
+
+  /**
+   * The same three cases as `getStreamData`, resolved to a *reference* rather than to bytes.
+   *
+   * This is what the Rust engine buys before a single sample is decoded. A local file is a path
+   * instead of the whole song base64-encoded across IPC; a download is a track id instead of a
+   * copy loaded into the media server; a stream is the signed URL itself instead of a
+   * `fetch_audio_source` round trip that publishes the body and hands back a loopback URL. In
+   * every case Rust already has, or can get, the bytes — asking the webview to carry them first
+   * was only ever in service of an `<audio>` element that no longer exists on this path.
+   */
+  private async getRustStreamData(track: Track): Promise<StreamData> {
+    if (track.source === "local") {
+      if (!track.localPath) {
+        throw new Error("Local track path is missing.");
+      }
+      return {
+        mimeType: track.mimeType ?? "audio/mp4",
+        rustSource: { kind: "file", path: track.localPath },
+      };
+    }
+
+    if (isTrackDownloaded(track.id)) {
+      return {
+        mimeType: track.mimeType ?? "audio/mp4",
+        rustSource: { kind: "offline", trackId: track.id },
+      };
+    }
+
+    const { url, mimeType, cookie } = await this.resolveStreamUrl(track);
+    logInternalInfo("YouTubeMusicDataSource.getRustStreamData resolved", {
+      trackId: track.id,
+      mimeType,
+      authenticated: Boolean(cookie),
+    });
+    return {
+      mimeType,
+      rustSource: { kind: "stream", url, mimeType, cookie },
     };
   }
 

@@ -39,6 +39,7 @@ notify = "8.2.0"
 futures-util = "0.3.33"
 # Already in the tree via tauri; declared directly only for `sleep` in the range-retry backoff.
 tokio = { version = "1", features = ["time"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aes-gcm = "0.10"

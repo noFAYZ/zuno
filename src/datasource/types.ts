@@ -256,3 +256,14 @@ export interface LibrarySnapshot {
   librarySongs?: Track[];
   recentlyPlayed: Track[];
 }
+
+/**
+ * Where the Rust audio engine should read a track's bytes from.
+ *
+ * Lives here rather than in `player/` because `StreamData` carries it and nothing under
+ * `datasource/` may import upward. Mirrors `NativeAudioSource` in `src-tauri/src/lib.rs`.
+ */
+export type RustAudioSource =
+  | { kind: "stream"; url: string; mimeType: string; cookie?: string }
+  | { kind: "offline"; trackId: string }
+  | { kind: "file"; path: string };

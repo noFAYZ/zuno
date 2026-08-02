@@ -1097,7 +1097,7 @@ export class PlayerController {
        * handover is a volume ramp between two live players — no load, and no silence between
        * them. A zero-length fade is the gapless case and swaps in the same tick.
        */
-      if (this.usesIframePlayback(track) && this.audioEngine.hasPreloaded(track.id)) {
+      if (this.usesPreloadDeck(track) && this.audioEngine.hasPreloaded(track.id)) {
         const swapped = await this.audioEngine.transitionToPreloaded(
           track.id,
           this.crossfadeSec * 1000,
@@ -1105,11 +1105,21 @@ export class PlayerController {
         if (swapped) {
           this.loadedTrackId = track.id;
           this.pendingSeekTime = null;
+          // The deck already holds these bytes, so the slot is stale rather than useful.
+          this.claimWarmedStream(track.id);
           logInternalInfo("PlayerController.ensureTrackLoaded preloaded deck", {
             trackId: track.id,
             crossfadeSec: this.crossfadeSec,
             durationMs: Math.round(performance.now() - startedAt),
           });
+          /*
+           * Warming has to continue from here too, or the chain stops after one transition:
+           * this branch returns before the ordinary load path's call, so the deck that just
+           * became active would have nothing queued behind it and the next track would load
+           * from cold — the first gapless handover would also be the last.
+           */
+          this.warmNextTrack();
+          this.beginPlayReport(track);
           return;
         }
       }
@@ -1124,6 +1134,8 @@ export class PlayerController {
           audioData.bytes,
           audioData.mimeType,
           audioData.sourceUrl,
+          audioData.rustSource,
+          track.durationSec,
         );
         this.loadedTrackId = track.id;
         if (this.pendingSeekTime !== null) {
@@ -1166,6 +1178,8 @@ export class PlayerController {
           audioData.bytes,
           audioData.mimeType,
           audioData.sourceUrl,
+          audioData.rustSource,
+          track.durationSec,
         );
       } else {
         await this.audioEngine.loadTrack(
@@ -1173,6 +1187,8 @@ export class PlayerController {
           audioData?.bytes,
           audioData?.mimeType,
           audioData?.sourceUrl,
+          audioData?.rustSource,
+          track.durationSec,
         );
       }
 
@@ -1274,9 +1290,17 @@ export class PlayerController {
     const getStreamData = this.dataSource.getStreamData.bind(this.dataSource);
     this.warmingStream = true;
     void getStreamData(next)
-      .then((data) => {
+      .then(async (data) => {
         this.warmedStream = { trackId: next.id, data };
         logInternalDebug("PlayerController.warmNextTrack audio ready", { trackId: next.id });
+        /*
+         * On the Rust engine the warmed stream goes one step further and is decoded onto the
+         * standby deck, which is what `ensureTrackLoaded` then transitions to. Held in the slot
+         * as well, so a transition that misses — a skip past this track and back, say — still
+         * finds the resolved URL rather than paying for it twice.
+         */
+        if (!data.rustSource || !this.audioEngine.usesRustAudio()) return;
+        await this.audioEngine.preloadRustTrack(next.id, data.rustSource, next.durationSec ?? 0);
       })
       .catch((error) => {
         logInternalWarn("PlayerController.warmNextTrack audio failed", {
@@ -1305,16 +1329,18 @@ export class PlayerController {
   }
 
   /**
-   * Whether a track plays through the IFrame deck rather than an audio element.
+   * Whether a track can be handed to a standby deck rather than loaded on the spot.
    *
-   * Only the IFrame path has a deck to preload. Offline and local files are read from disk
-   * with no load gap worth hiding, and handing one of those to the standby deck would play the
-   * streamed version of a track the user downloaded on purpose.
+   * Two engines have one: the IFrame pair, and the Rust pair. The `<audio>` engine does not,
+   * which is why gapless and crossfade quietly did nothing whenever it was selected.
+   *
+   * Offline and local files are excluded either way — they are read from disk with no load gap
+   * worth hiding, and handing one to the IFrame deck would play the streamed version of a track
+   * the user downloaded on purpose.
    */
-  private usesIframePlayback(track: Track): boolean {
-    return track.source !== "local"
-      && !isTrackDownloaded(track.id)
-      && !this.audioEngine.usesNativeAudio();
+  private usesPreloadDeck(track: Track): boolean {
+    if (track.source === "local" || isTrackDownloaded(track.id)) return false;
+    return this.audioEngine.usesRustAudio() || !this.audioEngine.usesNativeAudio();
   }
 
   /**
@@ -1389,7 +1415,7 @@ export class PlayerController {
     if (!(duration > 0) || !Number.isFinite(remaining) || remaining <= 0) return;
 
     const next = this.peekNextTrack();
-    if (!next || !this.usesIframePlayback(next)) return;
+    if (!next || !this.usesPreloadDeck(next)) return;
 
     if (remaining <= PRELOAD_LEAD_SEC) this.audioEngine.preloadNext(next.id);
 

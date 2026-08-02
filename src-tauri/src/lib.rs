@@ -42,6 +42,7 @@ mod macos_media;
 #[cfg(target_os = "windows")]
 mod windows_media;
 
+mod audio;
 mod discord_rpc;
 mod lastfm;
 
@@ -1934,12 +1935,12 @@ struct ProxyHttpResponse {
  * for a range past that prefix waits for it rather than being answered short, which is what
  * lets an `<audio>` element start on the first chunk while the rest is still downloading.
  */
-struct MediaBuffer {
+pub(crate) struct MediaBuffer {
     /// Sized on creation; each slot's length is its own chunk size, so no stride is stored.
     chunks: Vec<Option<Vec<u8>>>,
-    total: usize,
+    pub(crate) total: usize,
     /// Set when the download gave up. The server answers 503 rather than waiting out the clock.
-    failed: bool,
+    pub(crate) failed: bool,
 }
 
 impl MediaBuffer {
@@ -1953,7 +1954,7 @@ impl MediaBuffer {
     }
 
     /// Bytes servable from offset 0 without a hole.
-    fn contiguous_len(&self) -> usize {
+    pub(crate) fn contiguous_len(&self) -> usize {
         let mut len = 0;
         for chunk in &self.chunks {
             match chunk {
@@ -1977,7 +1978,7 @@ impl MediaBuffer {
     }
 
     /// Copies `start..=end` out of the chunk list, which may straddle several chunks.
-    fn read(&self, start: usize, end: usize) -> Vec<u8> {
+    pub(crate) fn read(&self, start: usize, end: usize) -> Vec<u8> {
         let mut out = Vec::with_capacity(end.saturating_sub(start) + 1);
         let mut offset = 0;
         for chunk in &self.chunks {
@@ -3134,6 +3135,239 @@ async fn fill_media_buffer(
     }
 }
 
+/* ---------------------------------------------------------------------------------------- *
+ * Native audio engine
+ *
+ * The `<audio>` path above hands bytes to the webview over loopback HTTP and lets Chromium
+ * decode them. These commands hand the same bytes to symphonia instead, so nothing leaves the
+ * Rust process — no media server round trip, no second copy of the song in the renderer, and
+ * two real decks to fade between. `audio.rs` owns the decoding and output; this layer only
+ * resolves a source into something readable and forwards the request.
+ * ---------------------------------------------------------------------------------------- */
+
+/// Where a track's bytes come from. The three cases the player actually has.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum NativeAudioSource {
+    /// A signed googlevideo URL, decoded as it downloads.
+    Stream {
+        url: String,
+        mime_type: String,
+        cookie: Option<String>,
+    },
+    /// A track already in the offline store.
+    Offline { track_id: String },
+    /// A file the user pointed at a music folder.
+    File { path: String },
+}
+
+/**
+ * Opens a source as a blocking reader.
+ *
+ * The streaming case is the interesting one: it publishes an empty buffer sized from the URL's
+ * own `clen`, starts the same ranged fill the media server uses, and returns a reader over it
+ * straight away. The decoder then reads the container header out of the head chunk while the
+ * rest is still arriving — which is the whole difference from the `<audio>` path, where the
+ * body had to be published before an element could be pointed at it.
+ */
+fn open_native_audio_reader(
+    app: &tauri::AppHandle,
+    source: NativeAudioSource,
+) -> Result<Box<dyn NativeAudioRead>, CommandError> {
+    match source {
+        NativeAudioSource::Stream {
+            url,
+            mime_type,
+            cookie,
+        } => {
+            let request_url = url::Url::parse(&url)
+                .map_err(|error| cache_error(format!("audio URL parse failed: {error}")))?;
+            let total = signed_content_length(&request_url).unwrap_or(0) as usize;
+            if total == 0 {
+                return Err(cache_error("audio URL declared no length"));
+            }
+
+            let ranges = playback_ranges(total);
+            let buffer = Arc::new(Mutex::new(MediaBuffer::pending(total, ranges.len())));
+            tauri::async_runtime::spawn(fill_media_buffer(
+                url,
+                String::new(),
+                cookie,
+                mime_type,
+                Arc::clone(&buffer),
+                ranges,
+            ));
+            Ok(Box::new(audio::BufferReader::new(buffer)))
+        }
+        NativeAudioSource::Offline { track_id } => {
+            let path = offline_entry_path(app, &track_id)?;
+            let file = File::open(&path)
+                .map_err(|error| cache_error(format!("offline read failed: {error}")))?;
+            Ok(Box::new(file))
+        }
+        NativeAudioSource::File { path } => {
+            let path = PathBuf::from(path);
+            // Re-validated here rather than trusted from the frontend, exactly as
+            // `local_audio_read` does — this is the same trust boundary.
+            if !path.is_file() || !is_local_audio_file(&path) {
+                return Err(cache_error("local audio file is unavailable."));
+            }
+            let file = File::open(&path)
+                .map_err(|error| cache_error(format!("local audio read failed: {error}")))?;
+            Ok(Box::new(file))
+        }
+    }
+}
+
+/// What rodio's decoder needs of a byte source. Named so the three cases above can be boxed
+/// into one type.
+trait NativeAudioRead: Read + std::io::Seek + Send + Sync {}
+impl<T: Read + std::io::Seek + Send + Sync> NativeAudioRead for T {}
+
+/**
+ * Decodes a track onto a deck.
+ *
+ * `standby` loads it onto the idle deck instead of the playing one, which is what
+ * `native_audio_transition` later swaps to. Returns the duration actually decoded, falling back
+ * to the provider's when the container declares none — Opus in WebM usually does not.
+ *
+ * The decode runs on a blocking pool thread, not on the audio thread: building a decoder reads
+ * the container header, and for a stream that means waiting on the network. Doing it here keeps
+ * the audio thread free to go on reporting the position of the track that is still playing.
+ */
+#[tauri::command]
+async fn native_audio_load(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, audio::NativeAudio>,
+    track_id: String,
+    source: NativeAudioSource,
+    duration_sec: Option<f64>,
+    standby: Option<bool>,
+) -> Result<f64, CommandError> {
+    let reader = open_native_audio_reader(&app, source)?;
+    let started_at = Instant::now();
+
+    let (decoded, decoded_duration) = tauri::async_runtime::spawn_blocking(move || {
+        use rodio::Source as _;
+        rodio::Decoder::new(reader)
+            .map(|decoder| {
+                let duration = decoder.total_duration().map(|value| value.as_secs_f64());
+                (Box::new(decoder) as audio::BoxedSource, duration)
+            })
+            .map_err(|error| format!("audio decode failed: {error}"))
+    })
+    .await
+    .map_err(|error| cache_error(format!("audio decode task failed: {error}")))?
+    .map_err(cache_error)?;
+
+    let duration = audio::request(&state, |reply| audio::Command::Load {
+        track_id: track_id.clone(),
+        source: decoded,
+        fallback_duration_sec: duration_sec.unwrap_or(0.0),
+        decoded_duration_sec: decoded_duration,
+        standby: standby.unwrap_or(false),
+        reply,
+    })
+    .map_err(cache_error)?
+    .map_err(cache_error)?;
+
+    eprintln!(
+        "[internal][tauri][info] native_audio_load track_id={} standby={} duration_sec={} decode_ms={}",
+        track_id,
+        standby.unwrap_or(false),
+        duration,
+        started_at.elapsed().as_millis()
+    );
+    Ok(duration)
+}
+
+#[tauri::command]
+fn native_audio_play(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
+    audio::request(&state, audio::Command::Play)
+        .map_err(cache_error)?
+        .map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_pause(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
+    state.send(audio::Command::Pause).map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_stop(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
+    state.send(audio::Command::Stop).map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_seek(
+    state: tauri::State<'_, audio::NativeAudio>,
+    position_sec: f64,
+) -> Result<(), CommandError> {
+    state
+        .send(audio::Command::Seek(position_sec))
+        .map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_set_volume(
+    state: tauri::State<'_, audio::NativeAudio>,
+    volume: f32,
+    muted: bool,
+) -> Result<(), CommandError> {
+    state
+        .send(audio::Command::Volume { volume, muted })
+        .map_err(cache_error)
+}
+
+/**
+ * Playback speed.
+ *
+ * ponytail: this resamples, so it transposes — a song at 1.25x plays a little sharp, where the
+ * `<audio>` element corrected the pitch for free. Rate is a podcast feature in a music app and
+ * defaults to 1, so it buys a time-stretcher's worth of DSP for very few listeners. Add
+ * `signalsmith-stretch` between the decoder and the sink if it turns out to matter.
+ */
+#[tauri::command]
+fn native_audio_set_rate(
+    state: tauri::State<'_, audio::NativeAudio>,
+    rate: f32,
+) -> Result<(), CommandError> {
+    state.send(audio::Command::Rate(rate)).map_err(cache_error)
+}
+
+/// Hands playback to the standby deck, over an equal-power crossfade when `fade_ms` is above
+/// zero and in a single step when it is not. False means nothing was preloaded and the caller
+/// should load normally.
+#[tauri::command]
+fn native_audio_transition(
+    state: tauri::State<'_, audio::NativeAudio>,
+    track_id: String,
+    fade_ms: u64,
+) -> Result<bool, CommandError> {
+    audio::request(&state, |reply| audio::Command::Transition {
+        track_id,
+        fade_ms,
+        reply,
+    })
+    .map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_has_standby(
+    state: tauri::State<'_, audio::NativeAudio>,
+    track_id: String,
+) -> Result<bool, CommandError> {
+    audio::request(&state, |reply| audio::Command::HasStandby { track_id, reply })
+        .map_err(cache_error)
+}
+
+#[tauri::command]
+fn native_audio_drop_standby(
+    state: tauri::State<'_, audio::NativeAudio>,
+) -> Result<(), CommandError> {
+    state.send(audio::Command::DropStandby).map_err(cache_error)
+}
+
 #[tauri::command]
 async fn fetch_youtube_music_audio(video_id: String) -> Result<AudioPayload, CommandError> {
     let started_at = Instant::now();
@@ -3935,6 +4169,12 @@ pub fn run() {
     builder
         .manage(LocalAudioWatcher(Mutex::new(None)))
         .setup(|app| {
+            /*
+             * The audio thread and its output device are not opened here — `NativeAudio` starts
+             * them on the first command. A listener on the IFrame engine should never claim a
+             * handle from the OS mixer for a decoder they will not use.
+             */
+            app.manage(audio::NativeAudio::new(app.handle().clone()));
             // Before the log is initialised, so a first run after the rename still logs to
             // the directory the user's settings were just restored into.
             migrate_legacy_app_data(app.handle());
@@ -4020,6 +4260,16 @@ pub fn run() {
             offline_audio_stats,
             offline_audio_prune,
             fetch_youtube_music_audio,
+            native_audio_load,
+            native_audio_play,
+            native_audio_pause,
+            native_audio_stop,
+            native_audio_seek,
+            native_audio_set_volume,
+            native_audio_set_rate,
+            native_audio_transition,
+            native_audio_has_standby,
+            native_audio_drop_standby,
             proxy_http_request,
             load_youtube_music_cookie,
             sign_in_youtube_music,
@@ -4063,8 +4313,66 @@ mod tests {
         audio_chunk_size, playback_ranges, serialize_cookie_pairs, MediaBuffer, AUDIO_HEAD_CHUNK_BYTES, signed_content_length, store_media_item,
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
     };
+    use super::audio::BufferReader;
     use std::collections::HashMap;
+    use std::io::{Read, Seek, SeekFrom};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /**
+     * The streaming reader the Rust decoder pulls through.
+     *
+     * This is the one place a mistake is inaudible until it is a corrupted song: ranges land
+     * out of order, so a reader that measured "how much has arrived" rather than "how much has
+     * arrived *from the start*" would happily hand the decoder chunk 1 as though it were chunk
+     * 0 and splice the file together wrong.
+     */
+    #[test]
+    fn buffer_reader_serves_only_the_contiguous_prefix() {
+        let buffer = Arc::new(Mutex::new(MediaBuffer::pending(6, 3)));
+        let mut reader = BufferReader::new(Arc::clone(&buffer));
+
+        // The second range wins the race. Nothing is servable yet regardless: byte 0 is missing.
+        buffer.lock().unwrap().put(1, vec![3, 4]);
+
+        let filling = Arc::clone(&buffer);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            filling.lock().unwrap().put(0, vec![1, 2]);
+        });
+
+        let started_at = std::time::Instant::now();
+        let mut head = [0u8; 2];
+        let read = reader.read(&mut head).unwrap();
+        /*
+         * Two things at once: the bytes are the head, not the chunk that happened to land
+         * first, and getting them took the wait. A reader that returned 0 here would look like
+         * the end of the stream to the decoder, and one that returned `[3, 4]` would play the
+         * middle of the song as its beginning.
+         */
+        assert_eq!(&head[..read], &[1, 2]);
+        assert!(started_at.elapsed() >= Duration::from_millis(25));
+
+        // The prefix is served as one run rather than one chunk at a time — the chunk layout is
+        // the downloader's business, not something the decoder should feel.
+        let mut out = [0u8; 8];
+        let read = reader.read(&mut out).unwrap();
+        assert_eq!(&out[..read], &[3, 4]);
+
+        /*
+         * The tail never arrives and the download gives up. EOF, not an error and not a hang:
+         * the decoder finishes the frames it has and the track reports its end, so the queue
+         * advances instead of stalling on a deck that will never empty.
+         */
+        buffer.lock().unwrap().failed = true;
+        assert_eq!(reader.read(&mut out).unwrap(), 0);
+
+        // Symphonia probes containers by seeking around; past the end must clamp rather than
+        // fail, or a probe of a body still downloading kills the load.
+        assert_eq!(reader.seek(SeekFrom::End(0)).unwrap(), 6);
+        assert_eq!(reader.seek(SeekFrom::Start(999)).unwrap(), 6);
+        assert_eq!(reader.seek(SeekFrom::Start(2)).unwrap(), 2);
+    }
 
     /// The head decides how long a click waits for sound, and the two ranges must tile the
     /// body exactly — a gap here is a hole in the audio.

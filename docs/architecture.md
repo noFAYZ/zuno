@@ -20,7 +20,7 @@ flowchart TB
     UI["React UI<br/>src/ui/**"]
     STATE["Controllers + stores<br/>src/player/**"]
     DS["DataSource layer<br/>src/datasource/**"]
-    IFRAME["Two hidden IFrame decks<br/><i>or</i> an &lt;audio&gt; element"]
+    IFRAME["Two hidden IFrame decks<br/><i>or</i> an &lt;audio&gt; element<br/><i>or</i> nothing — Rust plays it"]
   end
 
   subgraph Mini["mini-player window (mini.html → src/mini.tsx)"]
@@ -39,6 +39,7 @@ flowchart TB
     RPC["Discord IPC"]
     LFM["Last.fm API"]
     SRV["127.0.0.1 media server"]
+    SND["symphonia decode + cpal output<br/>two decks"]
     WATCH["notify folder watcher"]
   end
 
@@ -47,7 +48,7 @@ flowchart TB
   DS -->|invoke| CMD
   UI -->|invoke| CMD
   MP <-->|Tauri events| UI
-  CMD --> CACHE & OFF & SET & KEY & HTTP & MEDIA & TRAY & RPC & LFM & SRV & WATCH
+  CMD --> CACHE & OFF & SET & KEY & HTTP & MEDIA & TRAY & RPC & LFM & SRV & SND & WATCH
   HTTP -->|HTTPS| YT["music.youtube.com / googlevideo.com"]
   IFRAME -->|audio| YT
 ```
@@ -57,12 +58,14 @@ Four rules explain most of the design:
 1. **All network traffic to Google goes through Rust** (`proxy_http_request`) so the WebView's
    CORS/cookie rules never apply, cookie auth can be signed properly, and rotated `Set-Cookie`
    values can be merged back into the stored session.
-2. **There are two playback engines and the user picks one** (`ui/settings/audioEngine.ts`).
+2. **There are three playback engines and the user picks one** (`ui/settings/audioEngine.ts`).
    `iframe` (the default) hands the video id to a hidden YouTube IFrame player, dodging the 403s
    that signed googlevideo URLs return when replayed from a different context — at the cost of a
    `youtube.com` subframe process, roughly 90 MB. `native` resolves and downloads the track through
-   Rust and plays it from an `<audio>` element, with no subframe at all. Local and downloaded
-   tracks always take the native path regardless of the setting.
+   Rust and plays it from an `<audio>` element, with no subframe at all. `rust` resolves the same
+   URL and decodes it in the Rust process with symphonia, out to the sound card through cpal — no
+   subframe, no media element, and no audio in the renderer at all. Local and downloaded tracks
+   always take a non-IFrame path regardless of the setting.
 3. **Downloads are a separate path from playback.** `offline_audio_save` fetches the same signed URL
    in Rust with a PO token, in 4 MiB ranges, and stores the bytes on disk; playback of a downloaded
    track then never touches the network.
@@ -96,6 +99,8 @@ real `http://` origin. Dev builds use the normal Vite dev server on port 1420.
 | `window-focused` | main window regains focus | `App.tsx` — destroys the mini player window, triggers connection recovery |
 | `windows-media-control` | SMTC or taskbar thumbnail button pressed | `useMediaSession` |
 | `offline-download-progress` | per-chunk progress during `offline_audio_save` | `player/offlineStore.ts` |
+| `native-audio-position` | every 250 ms while the Rust engine is playing | `player/rustAudio.ts` — the cached playhead |
+| `native-audio-ended` | the Rust engine's active deck ran out of samples | `player/rustAudio.ts` → the playback-owning `AudioEngine` |
 | `local-audio-changed` | `notify` watcher sees a change under a watched music folder | `main.tsx` → `notifyLocalPlaylistsChanged()` |
 
 **Mini ↔ main** is a set of plain Tauri events, no shared controllers:
@@ -183,7 +188,8 @@ Cache keys are versioned strings (`youtube-music:library:v5`, `youtube-music:tra
 
 | Module | Responsibility |
 |---|---|
-| `AudioEngine.ts` | Owns **two** hidden YouTube IFrame decks plus an optional `HTMLAudioElement`, and routes between them on `shouldUseNativeAudio()` — a live read of the audio-engine setting, so a change takes effect on the next track rather than the next launch. The standby deck holds the *next* track already cued, which is what makes transitions gapless; with a non-zero crossfade the two decks' volumes are ramped past each other. **Neither applies in native mode**, which has no deck to preload onto. `releaseIframePlayer()` frees the decks (and their subframe process) without disposing the engine; a module-level listener calls it on every engine except the current playback owner when the setting flips to native. `playbackClaimId` + `playbackOwner` guarantee only one engine makes sound at a time. |
+| `AudioEngine.ts` | Owns **two** hidden YouTube IFrame decks, an optional `HTMLAudioElement`, and — in `rust` mode — a handle to the Rust engine's own pair of decks (`rustAudio.ts`), routing between them on the audio-engine setting. On the Rust path every method below delegates and this class holds only bookkeeping: which track is on which deck, so `hasPreloaded` stays synchronous. Routes between the first two on `shouldUseNativeAudio()` — a live read of the audio-engine setting, so a change takes effect on the next track rather than the next launch. The standby deck holds the *next* track already cued, which is what makes transitions gapless; with a non-zero crossfade the two decks' volumes are ramped past each other. **Neither applies in native mode**, which has no deck to preload onto. `releaseIframePlayer()` frees the decks (and their subframe process) without disposing the engine; a module-level listener calls it on every engine except the current playback owner when the setting flips to native. `playbackClaimId` + `playbackOwner` guarantee only one engine makes sound at a time. |
+| `rustAudio.ts` | The frontend half of the Rust engine: the `native_audio_*` invokes, plus the cached position that lets `getCurrentTime()` stay synchronous. Position is pushed from Rust on a 250 ms `native-audio-position` event rather than polled, because a progress frame cannot await an `invoke`. The `native-audio-ended` subscription is **process-wide and dispatched to the playback owner** — one per engine would have every open tab advance its own queue on the same track end. |
 | `Queue.ts` | Pure queue data structure with three regions: played/current, a **manual queue** segment (`playNext` / `addToQueue`), and automatic upcoming tracks. Shuffle only touches the automatic region and remembers the original order so it can be restored. `move()` rejects cross-region moves. |
 | `PlayerController.ts` | One per tab. Orchestrates DataSource → AudioEngine → Queue, playback order (shuffle and repeat compose independently), crossfade/gapless settings, playback rate, stop-after-track, radio/autoplay refills, history, error surfacing, session export/restore, and Discord presence updates. Warms the next track as soon as the current one starts — its metadata always, its audio too on the native engine — because a skip lands whenever the listener decides, not only in the last few seconds. |
 | `TabManager.ts` | Owns the `Map<tabId, PlayerController>`. Distinguishes the **focused** tab (what you're looking at) from the **playback owner** (what's making sound), and suspends/resumes engines on switch. |
@@ -304,6 +310,8 @@ letting a stale response overwrite state.
 |---|---|
 | YouTube, streaming, `iframe` mode | No stream URL is fetched at all — the IFrame deck handles it from the video id. |
 | YouTube, streaming, `native` mode | `getStreamData` → `resolveStreamUrl` → `fetch_audio_source` downloads it in parallel ranges and re-serves it from the local media server. The MP4 `ftyp` check only applies when MP4 was the format asked for — `high` now reaches Opus, which has no `ftyp` box. |
+| YouTube, streaming, `rust` mode | `getRustStreamData` → `resolveStreamUrl` → the signed URL and cookie go straight to `native_audio_load`. Rust publishes an empty `MediaBuffer` sized from the URL's own `clen`, starts the same ranged fill, and hands symphonia a reader over it — so what a click waits for is the 128 KiB head chunk, not the file. Nothing is published to the media server and no audio crosses IPC. |
+| Local / downloaded, `rust` mode | `getRustStreamData` returns a path or a track id. No base64, no media server — Rust opens the file. |
 | YouTube, downloaded | `offline_audio_source` serves the stored bytes from the media server, with Range support. No network. |
 | YouTube, download | `getStreamData` → Innertube `getBasicInfo` → best adaptive `audio/mp4` at the configured quality → decipher → PO token → `offline_audio_save` fetches it in 4 MiB ranges, 6 at a time, emitting progress. |
 | Local file | `local_audio_read` returns base64 bytes + a MIME type guessed from the extension; the frontend builds a `Blob` object URL. |
@@ -480,7 +488,17 @@ Recorded so nobody re-derives them:
   broke, which is the proof it is inert.
 - Gapless and crossfade silently do nothing in `native` audio-engine mode — they ride the standby
   IFrame deck, which that mode has no equivalent of. The Settings copy says so, but nothing in the
-  code prevents the combination.
+  code prevents the combination. **`rust` mode is the fix**: it has two real decks and mixes them,
+  so `usesPreloadDeck()` admits it alongside `iframe`. `native` is what is left over.
+- Playback rate on the `rust` engine resamples, so it transposes — the `<audio>` element corrected
+  pitch for free via `preservesPitch`. Marked `ponytail:` at `native_audio_set_rate`; the fix is a
+  time-stretcher between the decoder and the sink.
+- `MediaServer` — the loopback `TcpListener`, `MEDIA_SERVER_MAX_ITEMS`, `Cache-Control: no-store`
+  and `parse_media_range` — exists only to hand bytes to an `<audio>` element. Once `rust` is the
+  default and the other two engines go, all of it and `fetch_audio_source` go with them.
+  `MediaBuffer` stays: the Rust decoder reads through it.
+- `app.security.csp` can only be tightened once the IFrame path is gone; the `rust` engine loads
+  nothing from `youtube.com` at runtime, so it is the precondition rather than the change.
 - `App.tsx` is 2156 lines with ~30 `useEffect` blocks, some at zero indentation — still the
   highest-value refactor target in the repo.
 - `getStreamUrl` on the YouTube Music data source is required by the abstract class but never called

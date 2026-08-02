@@ -2,7 +2,10 @@ import { logInternalError, logInternalInfo, logInternalWarn } from "../internal/
 import {
   AUDIO_ENGINE_MODE_CHANGE_EVENT,
   usesNativeAudioEngine,
+  usesRustAudioEngine,
 } from "../ui/settings/audioEngine";
+import type { RustAudioSource } from "../datasource/types";
+import * as rustAudio from "./rustAudio";
 
 type YouTubePlayerEvent = {
   data: number;
@@ -111,6 +114,24 @@ function shouldUseNativeAudio(): boolean {
   return usesNativeAudioEngine();
 }
 
+/*
+ * One `ended` subscription for the whole process, dispatched to whichever engine owns playback.
+ *
+ * Rust has a single engine but there is an `AudioEngine` per tab, so a per-engine subscription
+ * would have every tab handle the same event and advance its own queue — one track end skipping
+ * three. Installed on the first Rust load rather than at import so a listener on the IFrame
+ * engine never registers one.
+ */
+let rustEndedRouted = false;
+
+function routeRustEnded(): void {
+  if (rustEndedRouted) return;
+  rustEndedRouted = true;
+  rustAudio.setEndedListener(() => {
+    playbackOwner?.handleRustEnded();
+  });
+}
+
 function isPlayerStateTimeout(error: unknown): boolean {
   return error instanceof Error
     && /^Timed out waiting for YouTube player state: /.test(error.message);
@@ -171,6 +192,17 @@ export class AudioEngine {
     return shouldUseNativeAudio();
   }
 
+  /** Rust decodes and plays; nothing in this class touches a media element or an IFrame. */
+  private get useRustAudio(): boolean {
+    return usesRustAudioEngine();
+  }
+
+  /** What Rust has loaded on the active deck for this engine, or null. */
+  private rustTrackId: string | null = null;
+  /** What Rust has decoded on the standby deck, mirrored so `hasPreloaded` stays synchronous. */
+  private rustStandbyTrackId: string | null = null;
+  private rustDurationSec = 0;
+  private rustStandbyDurationSec = 0;
   private player: YouTubePlayer | null = null;
   private playerHost: HTMLElement | null = null;
   private playerPromise: Promise<YouTubePlayer> | null = null;
@@ -216,12 +248,28 @@ export class AudioEngine {
     return this.useNativeAudio;
   }
 
+  usesRustAudio(): boolean {
+    return this.useRustAudio;
+  }
+
   async loadTrack(
     videoId: string,
     audioData?: ArrayBuffer,
     mimeType?: string,
     sourceUrl?: string,
+    rustSource?: RustAudioSource,
+    durationSec?: number,
   ): Promise<void> {
+    if (this.useRustAudio) {
+      if (!rustSource) {
+        throw new Error("Rust playback requires a resolved audio source.");
+      }
+      this.releaseIframePlayer();
+      this.releaseNativeAudio();
+      await this.loadRustAudio(videoId, rustSource, durationSec ?? 0);
+      return;
+    }
+
     if (this.useNativeAudio) {
       if (!audioData && !sourceUrl) {
         throw new Error("Native playback requires downloaded audio data.");
@@ -269,8 +317,14 @@ export class AudioEngine {
     audioData?: ArrayBuffer,
     mimeType?: string,
     sourceUrl?: string,
+    rustSource?: RustAudioSource,
+    durationSec?: number,
   ): Promise<void> {
     this.player?.stopVideo();
+    if (this.useRustAudio && rustSource) {
+      await this.loadRustAudio(videoId, rustSource, durationSec ?? 0);
+      return;
+    }
     await this.loadNativeAudio(videoId, audioData, mimeType, sourceUrl);
   }
 
@@ -278,8 +332,19 @@ export class AudioEngine {
     this.onEnded = listener;
   }
 
+  /** Called by the process-wide Rust `ended` router, on the engine that owns playback. */
+  handleRustEnded(): void {
+    this.rustTrackId = null;
+    this.onEnded?.();
+  }
+
   async play(): Promise<boolean> {
     const claimId = this.claimPlayback();
+    if (this.rustTrackId) {
+      await rustAudio.setVolume(this.volume, this.muted);
+      await rustAudio.play();
+      return claimId === playbackClaimId && playbackOwner === this;
+    }
     if (this.useNativeAudio || this.audio) {
       if (!this.audio || !this.currentVideoId) {
         throw new Error("No audio track is loaded.");
@@ -373,6 +438,7 @@ export class AudioEngine {
   }
 
   pause(): void {
+    if (this.rustTrackId) void rustAudio.pause().catch(() => {});
     this.audio?.pause();
     this.player?.pauseVideo();
     this.scheduleStandbyTeardown();
@@ -396,6 +462,7 @@ export class AudioEngine {
       playbackClaimId += 1;
     }
     this.cancelFade();
+    this.releaseRustAudio();
     this.releaseNativeAudio();
     this.player?.stopVideo();
     this.discardStandby();
@@ -456,6 +523,12 @@ export class AudioEngine {
 
   seekTo(seconds: number): void {
     if (!Number.isFinite(seconds)) return;
+    if (this.rustTrackId) {
+      void rustAudio.seek(Math.max(0, seconds)).catch((error: unknown) => {
+        rustAudio.warn("AudioEngine rust seek failed", error);
+      });
+      return;
+    }
     if (this.audio) {
       this.audio.currentTime = Math.min(
         Math.max(0, seconds),
@@ -518,11 +591,20 @@ export class AudioEngine {
   }
 
   getCurrentTime(): number {
+    /*
+     * Rust reports one position for one engine, so an engine that is not the one it loaded
+     * would otherwise read another tab's playhead. The track id is the discriminator: the
+     * events carry it, and only the engine that loaded it matches.
+     */
+    if (this.rustTrackId) {
+      return rustAudio.getPositionTrackId() === this.rustTrackId ? rustAudio.getCurrentTime() : 0;
+    }
     if (this.audio) return this.audio.currentTime;
     return this.player?.getCurrentTime() ?? 0;
   }
 
   getDuration(): number {
+    if (this.rustTrackId) return this.rustDurationSec;
     if (this.audio) return Number.isFinite(this.audio.duration) ? this.audio.duration : 0;
     return this.player?.getDuration() ?? 0;
   }
@@ -535,6 +617,7 @@ export class AudioEngine {
    * native-audio path, which serves offline files that have no load latency to hide.
    */
   preloadNext(videoId: string): void {
+    if (this.useRustAudio) return;
     if (this.useNativeAudio || this.audio) return;
     if (!videoId || videoId === this.currentVideoId) return;
     if (this.standbyVideoId === videoId || this.standbyPromise) return;
@@ -552,8 +635,31 @@ export class AudioEngine {
       });
   }
 
+  /**
+   * Decodes a track onto the Rust standby deck.
+   *
+   * The IFrame path preloads from a video id alone, because the embed resolves its own stream.
+   * Rust needs the bytes, so this is driven from `PlayerController.warmNextTrack` — which was
+   * already resolving the next track's `StreamData` ahead of time for the native engine. The
+   * only new work is handing what it found to a second deck instead of holding it in a slot.
+   */
+  async preloadRustTrack(
+    trackId: string,
+    source: RustAudioSource,
+    durationSec: number,
+  ): Promise<void> {
+    if (!this.useRustAudio || !trackId || trackId === this.rustTrackId) return;
+    if (this.rustStandbyTrackId === trackId) return;
+
+    routeRustEnded();
+    this.rustStandbyDurationSec = await rustAudio.load(trackId, source, durationSec, true);
+    this.rustStandbyTrackId = trackId;
+    logInternalInfo("AudioEngine rust preloaded", { trackId });
+  }
+
   /** Whether a transition to `videoId` can skip loading entirely. */
   hasPreloaded(videoId: string): boolean {
+    if (this.useRustAudio) return this.rustStandbyTrackId === videoId;
     return this.standbyPlayer !== null && this.standbyVideoId === videoId;
   }
 
@@ -569,6 +675,29 @@ export class AudioEngine {
    */
   async transitionToPreloaded(videoId: string, fadeMs: number): Promise<boolean> {
     if (!this.hasPreloaded(videoId)) return false;
+
+    if (this.useRustAudio) {
+      /*
+       * The whole transition happens in Rust: the standby deck is already decoded, so a zero
+       * fade starts it and stops the outgoing one in the same tick, and a non-zero fade ramps
+       * their volumes past each other on the audio thread. This is the case the `<audio>` path
+       * could never serve — one element, one body, nothing to fade against.
+       */
+      const swapped = await rustAudio.transition(videoId, Math.max(0, Math.round(fadeMs)));
+      if (!swapped) {
+        this.rustStandbyTrackId = null;
+        return false;
+      }
+      this.rustStandbyTrackId = null;
+      this.rustTrackId = videoId;
+      this.rustDurationSec = this.rustStandbyDurationSec;
+      this.rustStandbyDurationSec = 0;
+      this.currentVideoId = videoId;
+      this.loadRequestId += 1;
+      rustAudio.adoptTransitioned(videoId, this.rustDurationSec);
+      logInternalInfo("AudioEngine.transitionToPreloaded rust", { videoId, fadeMs });
+      return true;
+    }
 
     const outgoing = this.player;
     const outgoingHost = this.playerHost;
@@ -706,6 +835,65 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Decodes a track onto the active Rust deck.
+   *
+   * The `await` here is over the decoder reading the container header, not over the download:
+   * a stream is published to Rust as an empty buffer sized from the URL's own `clen` and filled
+   * behind this call, so what a click waits for is the first 128 KiB rather than the whole song.
+   * That is the defect this engine exists to fix — the `<audio>` path could not be pointed at a
+   * body until enough of it had been published to decode.
+   */
+  private async loadRustAudio(
+    videoId: string,
+    source: RustAudioSource,
+    durationSec: number,
+  ): Promise<void> {
+    const requestId = ++this.loadRequestId;
+    routeRustEnded();
+
+    // Dropping the standby first: it holds a decoded song, and a load that is not a transition
+    // means whatever was queued behind the old track is no longer next.
+    if (this.rustStandbyTrackId) {
+      this.rustStandbyTrackId = null;
+      this.rustStandbyDurationSec = 0;
+      await rustAudio.dropStandby().catch(() => {});
+    }
+
+    const duration = await rustAudio.load(videoId, source, durationSec);
+    if (requestId !== this.loadRequestId) return;
+
+    this.rustTrackId = videoId;
+    this.rustDurationSec = duration;
+    this.currentVideoId = videoId;
+    await rustAudio.setVolume(this.volume, this.muted);
+    await rustAudio.setRate(this.playbackRate);
+    logInternalInfo("AudioEngine rust audio loaded", {
+      videoId,
+      kind: source.kind,
+      durationSec: duration,
+    });
+  }
+
+  private releaseRustAudio(): void {
+    if (!this.rustTrackId && !this.rustStandbyTrackId) return;
+    /*
+     * There is one Rust engine behind every tab's `AudioEngine`, so `stop` is not this object's
+     * to call unless it is the one making sound. Closing a background tab disposes its engine,
+     * and without this that would cut off the tab that is actually playing. Its own bookkeeping
+     * is cleared either way — those decks belong to somebody else now.
+     */
+    const ownsRustPlayback = playbackOwner === null || playbackOwner === this;
+    this.rustTrackId = null;
+    this.rustStandbyTrackId = null;
+    this.rustDurationSec = 0;
+    this.rustStandbyDurationSec = 0;
+    if (!ownsRustPlayback) return;
+    void rustAudio.stop().catch((error: unknown) => {
+      rustAudio.warn("AudioEngine rust stop failed", error);
+    });
+  }
+
   private async loadNativeAudio(
     videoId: string,
     audioData?: ArrayBuffer,
@@ -789,6 +977,11 @@ export class AudioEngine {
   /** 1 is normal speed. Applies to whichever backend is currently playing. */
   setPlaybackRate(rate: number): void {
     this.playbackRate = Math.min(4, Math.max(0.25, rate));
+    if (this.useRustAudio) {
+      void rustAudio.setRate(this.playbackRate).catch((error: unknown) => {
+        rustAudio.warn("AudioEngine rust rate failed", error);
+      });
+    }
     this.applyNativeAudioSettings();
     this.player?.setPlaybackRate?.(this.playbackRate);
   }
@@ -798,6 +991,11 @@ export class AudioEngine {
   }
 
   private applyOutputVolume(): void {
+    if (this.rustTrackId) {
+      void rustAudio.setVolume(this.volume, this.muted).catch((error: unknown) => {
+        rustAudio.warn("AudioEngine rust volume failed", error);
+      });
+    }
     if (this.audio) {
       this.audio.volume = this.muted ? 0 : this.volume;
     }
@@ -852,6 +1050,7 @@ export class AudioEngine {
   }
 
   private pauseForPlaybackClaim(): void {
+    if (this.rustTrackId) void rustAudio.pause().catch(() => {});
     this.audio?.pause();
     this.player?.pauseVideo();
     // The standby is cued rather than playing, but a mid-crossfade claim would otherwise

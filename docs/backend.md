@@ -11,6 +11,7 @@ See [architecture.md](./architecture.md) for the system view.
 |---|---|---|
 | `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
 | `lib.rs` | ~3940 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
+| `audio.rs` | ~440 | The native engine: two rodio decks, the crossfade ramp, the position tick, and the blocking reader that lets symphonia decode a body still downloading |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -21,6 +22,7 @@ See [architecture.md](./architecture.md) for the system view.
 `tauri` (features `macos-private-api`, `tray-icon`, `image-png`),
 `tauri-plugin-{autostart,opener,localhost,updater,process,dialog}`,
 `reqwest` (rustls-tls, gzip/brotli/deflate, **stream**), `futures-util` (parallel range downloads),
+`rodio` 0.22 with `symphonia-all` (symphonia decodes, cpal plays, rodio resamples between them),
 `keyring` 3.6 with native backends, `lofty` 0.24 (audio tag read/write), `notify` 8.2 (folder
 watching), `discord-rich-presence`, `md5`, `base64`, `url`, `portpicker`.
 macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows adds the `windows`
@@ -207,8 +209,41 @@ Replacing a key mid-playback is safe: `handle_media_request` clones the `Arc` be
 a request already in flight finishes against the bytes it started with.
 
 **Note:** which of these runs for ordinary streaming depends on the audio-engine setting. In
-`iframe` mode (the default) none of them do — the IFrame decks stream directly. Downloads always
-use `offline_audio_save` below.
+`iframe` mode (the default) none of them do — the IFrame decks stream directly. In `rust` mode the
+media server is bypassed too: `native_audio_load` reads through `MediaBuffer` in-process. Downloads
+always use `offline_audio_save` below.
+
+### Audio — the native engine (`audio.rs`)
+
+| Command | Signature | Notes |
+|---|---|---|
+| `native_audio_load` | `(track_id, source, duration_sec?, standby?) -> f64` | Decodes onto the active deck, or the standby one when `standby`. Returns the duration decoded, falling back to the provider's when the container declares none — Opus in WebM usually does not |
+| `native_audio_play` / `_pause` / `_stop` | `()` | |
+| `native_audio_seek` | `(position_sec)` | |
+| `native_audio_set_volume` | `(volume, muted)` | |
+| `native_audio_set_rate` | `(rate)` | Resamples, so it transposes. See §7 |
+| `native_audio_transition` | `(track_id, fade_ms) -> bool` | Swaps to the standby deck. `fade_ms` of 0 is the gapless case; above 0 both decks play and their volumes ramp past each other. False means nothing was preloaded |
+| `native_audio_has_standby` | `(track_id) -> bool` | |
+| `native_audio_drop_standby` | `()` | |
+
+`NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
+`file` (a path, re-validated here rather than trusted from the frontend).
+
+Three things are load-bearing:
+
+- **One owned thread behind a channel.** cpal's stream handle is not `Send` on every backend and
+  Tauri state must be, so only the `Sender` escapes the module. The same thread runs the 250 ms
+  position tick out of its own `recv_timeout`, and steps an in-progress crossfade at 20 ms — a
+  fade that slept in the command loop would starve position events for its whole window.
+- **The decoder is built off the audio thread.** `rodio::Decoder::new` reads the container header,
+  which for a stream means waiting on the network; `native_audio_load` does it on a blocking pool
+  thread and sends the thread a ready `Box<dyn Source + Send>`. Preloading the next track therefore
+  never stalls the position feed of the one playing.
+- **`BufferReader` blocks rather than reporting a short read.** `MediaBuffer` only exposes its
+  contiguous prefix, so a read either returns bytes from offset 0 without a hole or waits for the
+  gap to fill. A short read would look like the end of the stream to symphonia. A failed download
+  reports EOF, not an error, so the track ends and the queue advances instead of hanging on a deck
+  that will never empty.
 
 **`fetch_audio_ranged`** is the one downloader both playback and the offline store use, so the
 two cannot drift apart on speed — playback used to take the single-request path while downloads
@@ -273,6 +308,7 @@ produce the same user-visible outcome — a rescan.
 | `update_windows_media_session` | `windows_media.rs` | Windows only (`#[cfg]` inside `generate_handler!`) |
 | `update_macos_media_session` | `macos_media.rs` | macOS only |
 | `quit_app` | `lib.rs` | Routes to `close_or_hide_main_window` |
+| `native_audio_*` | `audio.rs` | See §3. Emits `native-audio-position` and `native-audio-ended` |
 | `greet` | `lib.rs` | Tauri scaffolding leftover; unused |
 
 **Windows media** (`windows_media.rs`): a `MediaPlayer` + `SystemMediaTransportControls` pair driving
@@ -308,7 +344,8 @@ that the list is missing every command added since it was written (all `offline_
 blocks or stop treating them as a checklist; do not add to them expecting an effect.
 
 `app.security.csp` is `null` — no CSP. Required because the YouTube IFrame API script is loaded from
-`youtube.com` at runtime. If native playback ever replaces the IFrame path, this should be tightened.
+`youtube.com` at runtime. The `rust` audio engine loads nothing from `youtube.com`, so retiring the
+IFrame path is the precondition for tightening this.
 
 Defense in depth that *is* in place:
 
@@ -359,6 +396,7 @@ release workflow under `.github/workflows/`.
 | `cookie_domain_matches_*` | exact, parent-domain, and rejection cases |
 | `media_items_stay_capped_and_evict_the_coldest_first` | `store_media_item` holds the cap and drops the oldest, not an arbitrary entry |
 | `restoring_the_same_track_replaces_rather_than_accumulates` | a stable key means a replay reuses its slot |
+| `buffer_reader_serves_only_the_contiguous_prefix` | `BufferReader` waits for the head instead of serving a chunk that landed early, spans chunk boundaries in one read, reports EOF on a failed download, and clamps a seek past the end |
 
 The frontend's equivalent is `npm run check` (`scripts/run-checks.mjs` over `src/**/*.check.ts`).
 There is no component/DOM test harness on either side.

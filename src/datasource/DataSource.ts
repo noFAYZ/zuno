@@ -12,6 +12,7 @@ import type {
   Lyrics,
   Playlist,
   ResolvedLink,
+  RustAudioSource,
   SearchCategory,
   SearchResults,
   AuthStage,
@@ -38,6 +39,14 @@ export type StreamData = {
   bytes?: ArrayBuffer;
   mimeType?: string;
   sourceUrl?: string;
+  /**
+   * Where the Rust engine should read the bytes from, when that engine is selected.
+   *
+   * Present *instead of* `bytes` and `sourceUrl`, not alongside them: the whole point of the
+   * Rust path is that no audio crosses IPC and nothing is published to the media server, so
+   * resolving one of the other two would do the work this avoids.
+   */
+  rustSource?: RustAudioSource;
 };
 
 export abstract class DataSource {
