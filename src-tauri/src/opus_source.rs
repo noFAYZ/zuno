@@ -40,6 +40,30 @@ pub(crate) fn is_opus(mime_type: &str) -> bool {
     lowered.contains("opus") || lowered.contains("webm")
 }
 
+/**
+ * How long the track is, according to the container.
+ *
+ * `n_frames` is a count in whatever unit the container keeps time in — Matroska's default is
+ * milliseconds, Ogg's is samples — so it only means anything through the track's own time base.
+ * Dividing it by the sample rate instead came out 48× short against WebM, which read as a
+ * three-second song: with crossfade on, `remaining` was inside the fade window from the first
+ * tick and the queue raced through fifteen tracks in twenty seconds.
+ *
+ * `None` means the container did not say, and the caller falls back to the duration the provider
+ * already reported for the track.
+ */
+fn container_duration(
+    time_base: Option<symphonia::core::units::TimeBase>,
+    n_frames: Option<u64>,
+) -> Option<Duration> {
+    let (time_base, frames) = (time_base?, n_frames?);
+    if time_base.numer == 0 || time_base.denom == 0 {
+        return None;
+    }
+    let time = time_base.calc_time(frames);
+    Some(Duration::from_secs_f64(time.seconds as f64 + time.frac))
+}
+
 pub(crate) struct OpusSource {
     format: Box<dyn FormatReader>,
     decoder: opus::Decoder,
@@ -112,13 +136,7 @@ impl OpusSource {
         let decoder = opus::Decoder::new(OPUS_SAMPLE_RATE, opus_channels)
             .map_err(|error| format!("opus decoder init failed: {error}"))?;
 
-        /*
-         * Duration from the container's own frame count rather than from the file size — an
-         * Opus stream is variable bitrate, so bytes say nothing useful about length.
-         */
-        let total_duration = params.n_frames.map(|frames| {
-            Duration::from_secs_f64(frames as f64 / OPUS_SAMPLE_RATE as f64)
-        });
+        let total_duration = container_duration(params.time_base, params.n_frames);
 
         /*
          * Pre-skip. Every Opus stream begins with encoder warm-up that is not part of the
@@ -253,5 +271,48 @@ impl Source for OpusSource {
         self.exhausted = false;
         let _ = self.decoder.reset_state();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::container_duration;
+    use symphonia::core::units::TimeBase;
+
+    /**
+     * A duration read through the container's time base, not by dividing by the sample rate.
+     *
+     * The numbers are the real ones from the failure: a track that reported 4.251 s was
+     * 204,061 ms of Matroska. With crossfade at 9 s that put `remaining` inside the fade window
+     * from the first tick, so every track handed straight over to the next and the queue burned
+     * through fifteen songs in twenty seconds.
+     */
+    #[test]
+    fn duration_is_read_through_the_containers_time_base() {
+        // Matroska's default timecode scale: milliseconds.
+        let mkv = container_duration(TimeBase::new(1, 1_000).into(), Some(204_061))
+            .expect("mkv duration");
+        assert!(
+            (mkv.as_secs_f64() - 204.061).abs() < 0.01,
+            "3:24 of Matroska, not the 4.25 s that dividing by 48000 produced: {mkv:?}",
+        );
+
+        // Ogg keeps time in samples, where dividing by the rate happens to be right — the point
+        // is that one formula covers both because it asks the container.
+        let ogg = container_duration(TimeBase::new(1, 48_000).into(), Some(9_794_928))
+            .expect("ogg duration");
+        assert!(
+            (ogg.as_secs_f64() - 204.06).abs() < 0.01,
+            "the same track in Ogg is the same length: {ogg:?}",
+        );
+
+        // Unknown stays unknown rather than becoming zero, so the caller can fall back to the
+        // duration the provider reported instead of trusting a made-up one.
+        assert!(container_duration(None, Some(204_061)).is_none());
+        assert!(container_duration(TimeBase::new(1, 1_000).into(), None).is_none());
+        assert!(
+            container_duration(Some(TimeBase { numer: 0, denom: 0 }), Some(204_061)).is_none(),
+            "a degenerate time base is unknown, not a panic — calc_time asserts on it",
+        );
     }
 }
