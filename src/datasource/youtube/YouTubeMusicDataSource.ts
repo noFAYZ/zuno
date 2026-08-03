@@ -3891,9 +3891,15 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     const client = await this.getMusicClient();
-    await client.playlist.delete(this.editablePlaylistId(playlist.id));
+    const playlistId = this.editablePlaylistId(playlist.id);
+    // youtubei.js 17.0.1's playlist.delete() loses this endpoint's API path and throws
+    // "Expected an api_url" before sending a request, so execute the same mutation directly.
+    const response = await client.actions.execute("playlist/delete", { playlistId });
+    if (!response.success) {
+      throw new Error(`Playlist deletion returned HTTP ${response.status_code}.`);
+    }
     await setCachedJson(this.getPlaylistTrackCacheKey(playlist.id), []);
-    logInternalInfo("YouTubeMusicDataSource.deletePlaylist", { playlistId: playlist.id });
+    logInternalInfo("YouTubeMusicDataSource.deletePlaylist", { playlistId });
   }
 
   /**
