@@ -659,6 +659,9 @@ const SyncedLine = memo(function SyncedLine({
     [index, register],
   );
 
+  // Check if there's letters
+  const isArabic = /[\u0600-\u06FF]/.test(text);
+
   // An empty LRC line is a real instrumental beat, not junk. It keeps its slot so the timing
   // stays honest, and announces itself when it comes up.
   if (!text.trim()) {
@@ -687,6 +690,8 @@ const SyncedLine = memo(function SyncedLine({
     <button
       ref={attach}
       type="button"
+      // The direction of the language
+      dir={isArabic ? "rtl" : "ltr"}
       tabIndex={isTabbable ? 0 : -1}
       aria-current={isActive ? "true" : undefined}
       onFocus={() => onFocusLine(index)}

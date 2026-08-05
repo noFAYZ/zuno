@@ -394,6 +394,17 @@ html[data-platform-linux] *::after {
   -webkit-text-fill-color: transparent;
 }
 
+/* For RTL Arabic language */
+[dir="rtl"] .lyric-sweep,
+.lyric-sweep[dir="rtl"],
+.lyric-sweep:dir(rtl) {
+  background-image: linear-gradient(
+    270deg,
+    var(--color-foreground) calc(var(--sweep, 0%) - 4%),
+    color-mix(in oklab, var(--color-foreground) 28%, transparent) calc(var(--sweep, 0%) + 7%)
+  );
+}
+
 /*
  * Slow parallax on the blurred cover behind the lyrics. Long and asymmetric on purpose: at
  * 44s nothing ever appears to move while you read, but the backdrop is never twice the same,
