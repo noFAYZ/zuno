@@ -7,15 +7,26 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  * Edit `RELEASE_NOTE_BODY` for each release and nothing else: the note is tied to the
  * installed version, not to a hand-maintained "should I show this" flag, so shipping a new
  * version is all it takes to show the new text exactly once per machine.
+ *
+ * The shape is fixed, and every release follows it:
+ *
+ *   **Topic** — one line, in plain language, about what changed for the listener.
+ *   ...one line per topic, four or so at most...
+ *
+ *   Report anything broken on GitHub, or come say hello at /r/myzuno.
+ *
+ *   Thanks :)
+ *
+ * No opening paragraph. This dialog interrupts a launch nobody asked to have interrupted, so
+ * it earns its place by being read in a glance — a lead-in is the first thing skipped, and it
+ * pushes the lines that matter below where the eye lands.
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `Playback now runs through a native Opus codec inside Zuno, instead of a hidden YouTube frame. Together with the rest of this release's optimisation work, that brings memory down to around 180 MB.
-
-**Gapless** — no silence between tracks, on streams, downloads and your own files alike.
-**Crossfade** — overlap the end of each track with the start of the next.
-**Equaliser** — ten bands and presets in Settings, applied to whatever is playing.
-**Playback method** — the new engine is the default. Settings still has the old ones.
+export const RELEASE_NOTE_BODY = `**Local files** — real tags and embedded cover art, editable from the app, artwork included.
+**Media keys** — play, pause and skip work again on macOS.
+**Lighter** — less CPU when idle, fewer GPU layers, and per-effect switches under Settings → Potato PC → Manage.
+**Library** — rebuilt page with filtering, sorting and keyboard navigation.
 
 Report anything broken on GitHub, or come say hello at /r/myzuno.
 
