@@ -22,9 +22,11 @@ const usesNativeWindowsMediaSession =
  * side (`macos_media.rs`) has always been built and registered — it simply had no caller, so
  * the app was invisible to macOS media controls.
  *
- * Linux is deliberately absent: WebKitGTK bridges `navigator.mediaSession` to MPRIS on its
- * own, so the fallback below already puts Zuno on the desktop's media widget. A native D-Bus
- * server would be a second implementation of something the platform is already doing.
+ * Linux registers its own MPRIS2 D-Bus interface (`linux_media.rs`, via souvlaki) rather than
+ * relying on WebKitGTK's own bridge, because the bridge doesn't surface next/previous through
+ * the desktop widget or media keys. Unlike Windows/macOS this one has an on/off switch — the
+ * existing "Show in system media controls" setting — since it's the only platform that ever had
+ * one to turn off.
  */
 const usesNativeMacosMediaSession =
   isTauri() && /Macintosh|Mac OS X/i.test(navigator.userAgent);
@@ -35,19 +37,17 @@ const usesNativeMediaSession =
   usesNativeMacosMediaSession ||
   usesNativeLinuxMediaSession;
 
-
-
-function getNativeMediaCommand(): string | null {
+function getNativeMediaCommand(linuxEnabled: boolean): string | null {
   if (usesNativeWindowsMediaSession) return "update_windows_media_session";
   if (usesNativeMacosMediaSession) return "update_macos_media_session";
-  if (usesNativeLinuxMediaSession) return "update_linux_media_session";
+  if (usesNativeLinuxMediaSession && linuxEnabled) return "update_linux_media_session";
   return null;
 }
 
-function getNativeMediaControlEvent(): string | null {
+function getNativeMediaControlEvent(linuxEnabled: boolean): string | null {
   if (usesNativeWindowsMediaSession) return "windows-media-control";
   if (usesNativeMacosMediaSession) return "macos-media-control";
-  if (usesNativeLinuxMediaSession) return "linux-media-control";
+  if (usesNativeLinuxMediaSession && linuxEnabled) return "linux-media-control";
   return null;
 }
 
@@ -77,13 +77,23 @@ export function useMediaSession(
   controller: PlayerControllerActions,
 ): void {
   const linuxMediaSession = useLinuxMediaSession();
-  // The browser `mediaSession` bridge must stay off on Windows/macOS: WebView2 and WKWebView
-  // already bridge it to SMTC / MPNowPlayingInfoCenter on their own, so enabling it there
-  // produces a second now-playing entry and double-fired media keys. Linux has no native
-  // session, so the browser bridge is the MPRIS path and obeys the toggle.
+  // The browser `mediaSession` bridge must stay off everywhere a native session exists:
+  // WebView2, WKWebView and WebKitGTK all bridge it to SMTC / MPNowPlayingInfoCenter / MPRIS on
+  // their own, so enabling it too produces a second now-playing entry and double-fired media
+  // keys. On Linux this also means turning the setting off hides Zuno from system media
+  // controls entirely, rather than falling back to the browser bridge.
   const mediaSessionEnabled = !usesNativeMediaSession && linuxMediaSession;
-  const nativeMediaCommand = useMemo(getNativeMediaCommand, []);
-  const nativeMediaControlEvent = useMemo(getNativeMediaControlEvent, []);
+  // ponytail: turning the toggle off just stops sending updates — the MPRIS entry freezes at
+  // its last state instead of disappearing, since souvlaki has no unregister call. Add a
+  // drop_controls command in linux_media.rs if a live "off" needs to clear it.
+  const nativeMediaCommand = useMemo(
+    () => getNativeMediaCommand(linuxMediaSession),
+    [linuxMediaSession],
+  );
+  const nativeMediaControlEvent = useMemo(
+    () => getNativeMediaControlEvent(linuxMediaSession),
+    [linuxMediaSession],
+  );
   const sendNativeMediaUpdate = useCallback((context: string, forceMetadata = false) => {
     if (!nativeMediaCommand) return;
 

@@ -6,11 +6,9 @@ import {
 } from "../../internal/durableLocalSetting";
 
 /**
- * Whether playback is exposed to the desktop's media controls (MPRIS on Linux).
- *
- * WebKitGTK bridges `navigator.mediaSession` to MPRIS on its own, which is what puts
- * Zuno on the media widget — but it also drives the now-playing notifications some
- * desktops show. Turning this off clears the session so neither appears.
+ * Whether playback is exposed to the desktop's media controls (MPRIS on Linux, via
+ * `linux_media.rs`/souvlaki). Also drives the now-playing notifications some desktops show.
+ * Turning this off stops publishing updates so neither appears.
  */
 const MEDIA_SESSION_STORAGE_KEY = "linux-media-session";
 const CHANGE_EVENT = "media-session-change";

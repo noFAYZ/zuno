@@ -101,17 +101,13 @@ impl LinuxMediaSession {
         };
 
         // Update playback status
+        let position = update
+            .position_sec
+            .filter(|p| p.is_finite())
+            .map(|p| souvlaki::MediaPosition(Duration::from_secs_f64(p.max(0.0))));
         let playback = match update.status.as_str() {
-            "playing" | "loading" => MediaPlayback::Playing {
-                progress: update
-                    .position_sec
-                    .map(|p| souvlaki::MediaPosition(Duration::from_secs_f64(p.max(0.0)))),
-            },
-            "paused" => MediaPlayback::Paused {
-                progress: update
-                    .position_sec
-                    .map(|p| souvlaki::MediaPosition(Duration::from_secs_f64(p.max(0.0)))),
-            },
+            "playing" | "loading" => MediaPlayback::Playing { progress: position },
+            "paused" => MediaPlayback::Paused { progress: position },
             _ => MediaPlayback::Stopped,
         };
 
@@ -122,7 +118,7 @@ impl LinuxMediaSession {
         // Update metadata only when metadata changes or force_metadata is true
         let duration = update
             .duration_sec
-            .filter(|&d| d > 0.0)
+            .filter(|d| d.is_finite() && *d > 0.0)
             .map(Duration::from_secs_f64);
 
         let next_metadata = CachedMetadata {
