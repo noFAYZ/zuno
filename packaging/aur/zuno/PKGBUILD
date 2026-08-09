@@ -34,6 +34,11 @@ depends+=(
   'alsa-lib'
 )
 
+# Native MPRIS2 controls talk to the session bus directly via souvlaki.
+depends+=(
+  'dbus'
+)
+
 optdepends=(
   'gst-plugins-bad: extra container and codec support'
   'gst-plugins-ugly: extra codec support'

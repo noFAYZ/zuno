@@ -195,6 +195,7 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             libasound2-dev \
+            libdbus-1-dev \
             cmake \
             patchelf
 

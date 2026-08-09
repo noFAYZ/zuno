@@ -92,6 +92,7 @@ jobs:
             libssl-dev \
             build-essential \
             libasound2-dev \
+            libdbus-1-dev \
             cmake
 
       # `--locked` because a Cargo.toml change that forgets its Cargo.lock is the other way this
