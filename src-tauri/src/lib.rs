@@ -41,6 +41,8 @@ use rand::{rngs::OsRng, RngCore};
 mod macos_media;
 #[cfg(target_os = "windows")]
 mod windows_media;
+#[cfg(target_os = "linux")]
+mod linux_media;
 
 mod audio;
 mod discord_rpc;
@@ -4595,6 +4597,8 @@ pub fn run() {
     let builder = builder.manage(windows_media::WindowsMediaSession::new());
     #[cfg(target_os = "macos")]
     let builder = builder.manage(macos_media::MacosMediaSession::new());
+    #[cfg(target_os = "linux")]
+    let builder = builder.manage(linux_media::LinuxMediaSession::new());
 
     builder
         .manage(LocalAudioWatcher(Mutex::new(None)))
@@ -4734,7 +4738,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             macos_media::update_macos_media_session,
             #[cfg(target_os = "windows")]
-            windows_media::update_windows_media_session
+            windows_media::update_windows_media_session,
+            #[cfg(target_os = "linux")]
+            linux_media::update_linux_media_session
         ])
         .run(context)
         .expect("error while running tauri application");

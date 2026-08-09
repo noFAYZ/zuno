@@ -28,18 +28,26 @@ const usesNativeWindowsMediaSession =
  */
 const usesNativeMacosMediaSession =
   isTauri() && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+const usesNativeLinuxMediaSession =
+  isTauri() && /Linux/i.test(navigator.userAgent);
 const usesNativeMediaSession =
-  usesNativeWindowsMediaSession || usesNativeMacosMediaSession;
+  usesNativeWindowsMediaSession ||
+  usesNativeMacosMediaSession ||
+  usesNativeLinuxMediaSession;
+
+
 
 function getNativeMediaCommand(): string | null {
   if (usesNativeWindowsMediaSession) return "update_windows_media_session";
   if (usesNativeMacosMediaSession) return "update_macos_media_session";
+  if (usesNativeLinuxMediaSession) return "update_linux_media_session";
   return null;
 }
 
 function getNativeMediaControlEvent(): string | null {
   if (usesNativeWindowsMediaSession) return "windows-media-control";
   if (usesNativeMacosMediaSession) return "macos-media-control";
+  if (usesNativeLinuxMediaSession) return "linux-media-control";
   return null;
 }
 

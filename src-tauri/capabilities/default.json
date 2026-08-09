@@ -74,6 +74,7 @@
       "proxy_http_request",
       "update_macos_media_session",
       "update_windows_media_session",
+      "update_linux_media_session",
       "save_youtube_credentials",
       "load_youtube_credentials",
       "delete_youtube_credentials",

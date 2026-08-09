@@ -69,3 +69,7 @@ windows = { version = "0.61.3", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+souvlaki = "0.7"
+

@@ -18,6 +18,7 @@ See [architecture.md](./architecture.md) for the system view.
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
 | `macos_media.rs` | 189 | `MPNowPlayingInfoCenter` (macOS only) |
+| `linux_media.rs` | 165 | MPRIS2 D-Bus interface via `souvlaki` (Linux only) |
 
 ### Dependencies of note
 
@@ -49,6 +50,7 @@ plugin(autostart, updater, process, dialog, opener)
 
 #[cfg(windows)] manage(WindowsMediaSession)
 #[cfg(macos)]   manage(MacosMediaSession)
+#[cfg(linux)]   manage(LinuxMediaSession)
 manage(LocalAudioWatcher)
 
 #[cfg(linux)] force main window decorations = true   // mutated on the config before build
@@ -362,6 +364,7 @@ produce the same user-visible outcome — a rescan.
 | `lastfm_update_now_playing` / `lastfm_scrobble` | | MD5 `api_sig` over sorted params + shared secret |
 | `update_windows_media_session` | `windows_media.rs` | Windows only (`#[cfg]` inside `generate_handler!`) |
 | `update_macos_media_session` | `macos_media.rs` | macOS only |
+| `update_linux_media_session` | `linux_media.rs` | Linux only |
 | `quit_app` | `lib.rs` | Routes to `close_or_hide_main_window` |
 | `native_audio_*` | `audio.rs` | See §3. Emits `native-audio-position` and `native-audio-ended` |
 | `greet` | `lib.rs` | Tauri scaffolding leftover; unused |
@@ -375,6 +378,10 @@ playback status, and timeline position. Button presses are emitted back to JS as
 
 **macOS media** (`macos_media.rs`): populates `MPNowPlayingInfoCenter` through `objc2`. Requires
 `macOSPrivateApi: true` in `tauri.conf.json`.
+
+**Linux media** (`linux_media.rs`): registers an MPRIS2 D-Bus interface (`org.mpris.MediaPlayer2.zuno`)
+via `souvlaki`. Button/seek events come back as `linux-media-control` payloads, same shape as the
+Windows path. Runs unconditionally alongside the WebKitGTK `navigator.mediaSession` bridge.
 
 **Last.fm** (`lastfm.rs`): API key and shared secret are compiled in — standard for a desktop client,
 since the secret only signs this app's requests and the user's session key is what actually
