@@ -10,6 +10,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
  * needs to be reproduced and tested against a live session before it goes back.
  */
 import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
+import { getAppSetting, removeAppSetting, setAppSetting } from "../../internal/appSettings";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { mintPoToken } from "./poToken";
@@ -385,6 +386,12 @@ export class YouTubeMusicDataSource extends DataSource {
   private musicAccountArtworkUrl: string | null = null;
   /** Candidates from the last discovery pass, so the switcher does not refetch on every open. */
   private accountCandidateCache: AccountCandidate[] | null = null;
+  /*
+   * Mirrors the durable copy of `SELECTED_ACCOUNT_STORAGE_KEY` so a library refresh — which
+   * reads this every time — pays a Tauri round trip once per process, not once per refresh.
+   * `undefined` means "not read yet"; `null` is a real, resolved "no preference".
+   */
+  private preferredAccountKeyCache: string | null | undefined;
   private libraryRefreshPromise: Promise<LibrarySnapshot> | null = null;
   private readonly albumRefreshPromises = new Map<string, Promise<Track[]>>();
   private readonly playlistRefreshPromises = new Map<string, Promise<Track[]>>();
@@ -642,11 +649,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private resetMusicSessionSelection(): void {
     // Signing out and back in may land on a different Google account entirely, where the old
     // preference would point at a channel that no longer exists.
-    try {
-      localStorage.removeItem(SELECTED_ACCOUNT_STORAGE_KEY);
-    } catch {
-      // A stale preference is ignored anyway: it only applies when a candidate matches it.
-    }
+    this.writePreferredAccountKey(null);
     this.musicAccountIndex = 0;
     this.musicOnBehalfOfUser = null;
     this.musicSerializedDelegationContext = null;
@@ -2412,12 +2415,54 @@ export class YouTubeMusicDataSource extends DataSource {
       ?? this.findBrowseId(endpoint);
   }
 
-  private readPreferredAccountKey(): string | null {
-    try {
-      return localStorage.getItem(SELECTED_ACCOUNT_STORAGE_KEY);
-    } catch {
-      return null;
+  /**
+   * The channel the listener actually chose, read durably.
+   *
+   * This used to be `localStorage` only, which does not reliably survive a restart in this
+   * app — every other cross-restart preference already went through `appSettings`'s
+   * Tauri-backed store for exactly that reason, and this was the one place that never got
+   * migrated. That gap is what "switch to my second channel" not sticking across a restart
+   * looked like: `findBestLibraryResponses` asks this on every refresh, got back a preference
+   * that never actually reached disk, found no match, and fell through to the "most library
+   * content wins" probe — which is a different channel by definition, since the listener
+   * deliberately switched away from it.
+   *
+   * A pre-migration install may still have a real choice sitting in `localStorage` with
+   * nothing durable behind it yet; that is read back once and persisted durably so this is
+   * the last time the fallback is needed.
+   */
+  private async readPreferredAccountKey(): Promise<string | null> {
+    if (this.preferredAccountKeyCache !== undefined) return this.preferredAccountKeyCache;
+
+    const durable = await getAppSetting<string>(SELECTED_ACCOUNT_STORAGE_KEY);
+    if (typeof durable === "string") {
+      this.preferredAccountKeyCache = durable;
+      return durable;
     }
+
+    let migrated: string | null = null;
+    try {
+      migrated = localStorage.getItem(SELECTED_ACCOUNT_STORAGE_KEY);
+    } catch {
+      migrated = null;
+    }
+    this.preferredAccountKeyCache = migrated;
+    if (migrated !== null) void setAppSetting(SELECTED_ACCOUNT_STORAGE_KEY, migrated);
+    return migrated;
+  }
+
+  /** Durable set/clear for the preferred channel, keeping the in-memory mirror in step. */
+  private writePreferredAccountKey(id: string | null): void {
+    this.preferredAccountKeyCache = id;
+    try {
+      if (id === null) localStorage.removeItem(SELECTED_ACCOUNT_STORAGE_KEY);
+      else localStorage.setItem(SELECTED_ACCOUNT_STORAGE_KEY, id);
+    } catch {
+      // Durable write below still applies even when the mirror fails.
+    }
+    void (id === null
+      ? removeAppSetting(SELECTED_ACCOUNT_STORAGE_KEY)
+      : setAppSetting(SELECTED_ACCOUNT_STORAGE_KEY, id));
   }
 
   /** Every channel on the signed-in Google account, with the active one flagged. */
@@ -2471,13 +2516,9 @@ export class YouTubeMusicDataSource extends DataSource {
       onBehalfOfUser: this.musicOnBehalfOfUser ?? undefined,
       serializedDelegationContext: this.musicSerializedDelegationContext ?? undefined,
     };
-    const previousPreference = this.readPreferredAccountKey();
+    const previousPreference = await this.readPreferredAccountKey();
 
-    try {
-      localStorage.setItem(SELECTED_ACCOUNT_STORAGE_KEY, id);
-    } catch {
-      // The switch still applies for this run; only the preference fails to stick.
-    }
+    this.writePreferredAccountKey(id);
 
     await this.useAccountCandidate(candidate);
 
@@ -2489,15 +2530,7 @@ export class YouTubeMusicDataSource extends DataSource {
         name: candidate.name,
         error: error instanceof Error ? error.message : String(error),
       });
-      try {
-        if (previousPreference === null) {
-          localStorage.removeItem(SELECTED_ACCOUNT_STORAGE_KEY);
-        } else {
-          localStorage.setItem(SELECTED_ACCOUNT_STORAGE_KEY, previousPreference);
-        }
-      } catch {
-        // Falling back to the automatic probe is still correct without the preference.
-      }
+      this.writePreferredAccountKey(previousPreference);
       await this.useAccountCandidate(previous);
       throw new Error(`YouTube Music rejected the switch to ${candidate.name ?? "that channel"}.`);
     }
@@ -2709,7 +2742,7 @@ export class YouTubeMusicDataSource extends DataSource {
      * deliberately switched to a channel that happens to have less in it — without this the
      * switch would silently undo itself on the next refresh.
      */
-    const preferredKey = this.readPreferredAccountKey();
+    const preferredKey = await this.readPreferredAccountKey();
     const preferred = preferredKey
       ? profileCandidates.find((candidate) => accountCandidateKey(candidate) === preferredKey)
       : undefined;
