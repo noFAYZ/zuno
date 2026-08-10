@@ -131,7 +131,8 @@ yay -S zuno     # or: paru -S zuno
 Install the `.deb` or `.rpm`, or `zuno` from the AUR on Arch. All three run on your system's
 WebKitGTK (rendering) and GStreamer (playback) rather than bundling their own.
 
-#### No sound, or "YouTube player error 5"
+<details>
+<summary>🔇 No sound, or "YouTube player error 5"</summary>
 
 Most distros don't install the codecs YouTube needs by default:
 
@@ -152,7 +153,10 @@ Confirm they registered:
 gst-inspect-1.0 | grep -E 'avdec_aac|avdec_h264'
 ```
 
-#### A blank grey window
+</details>
+
+<details>
+<summary>⬜ A blank grey window</summary>
 
 A WebKitGTK rendering problem under Wayland, most often on Nvidia. Launch from a terminal
 with one of:
@@ -171,7 +175,10 @@ Launching from an app menu instead? Add the same variable to the `Exec` line of
 Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
 ```
 
-#### An EGL error on launch
+</details>
+
+<details>
+<summary>⚠️ An EGL error on launch</summary>
 
 Preload the system Wayland client library:
 
@@ -181,7 +188,9 @@ LD_PRELOAD=/usr/lib/libwayland-client.so ~/Downloads/zuno*.AppImage
 
 In Gear Lever, add `LD_PRELOAD=/usr/lib/libwayland-client.so` to Zuno's environment variables.
 
-#### Anything else
+</details>
+
+#### 🪵 Anything else
 
 Open **Settings → Library → Application log**, reproduce the problem, and attach the log to
 an issue along with your desktop environment, display server (X11 or Wayland) and distro —
