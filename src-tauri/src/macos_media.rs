@@ -136,7 +136,7 @@ fn spawn_artwork_fetch(app: &AppHandle, url: String) {
         };
         if let Ok(mut state) = session.0.lock() {
             state.fetch = Some((url, bytes));
-        }
+        };
     });
 }
 
