@@ -277,7 +277,7 @@ export function HomePage({
             cut off while the centre of attention holds the smallest one.
           */
           variant="convex"
-          className="-mx-4 cursor-grab active:cursor-grabbing overflow-y-visible"
+          className="-mx-4 cursor-grab active:cursor-grabbing overflow-x-clip overflow-y-visible"
         >
           <DiceCard
             tracks={surpriseSuggestions}

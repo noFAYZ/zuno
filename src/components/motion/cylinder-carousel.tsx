@@ -507,7 +507,7 @@ export function CylinderCarousel({
         }}
         className={cn(
           // clip-path, not overflow: it also clips the GPU-composited balls
-          "relative w-full touch-none select-none outline-none [clip-path:inset(0)]",
+          "relative w-full touch-none select-none outline-none overflow-x-clip [clip-path:inset(0)]",
           "cursor-grab active:cursor-grabbing",
           "focus-visible:ring-2 focus-visible:ring-foreground/20 overflow-y-visible",
           className,

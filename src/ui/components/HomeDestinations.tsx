@@ -85,55 +85,30 @@ export function HomeDestinations({
 
   return (
     <section className="flex flex-col gap-3" aria-label="Go to">
-      <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(12rem,1fr))]">
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {cards.map((card) => (
           <motion.button
             key={card.key}
             type="button"
             onClick={card.onClick}
-            whileHover={{ y: -2 }}
             whileTap={{ scale: 0.98 }}
             transition={{ type: "spring", stiffness: 520, damping: 34 }}
             className={cn(
-              // `pl-12` is the stamp's gutter: it ends at 36px, so the text clears it by 12px.
-              "group/dest relative flex items-center overflow-hidden rounded-xl bg-card/80 p-3 pl-12 text-left border border-border",
+              "group/dest flex min-w-0 items-center gap-2.5 rounded-xl border border-border bg-card/80 p-2.5 text-left",
               "transition-colors hover:bg-card",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
-            {/*
-              Stamped rather than sat in a chip, and cropped only on the left — an icon clipped
-              on three sides reads as an accident rather than a decision.
-            */}
-            <card.icon
-              size={38}
-              /*
-               * Optical compensation. 1.5 is tuned for a 20px glyph; at 48px the same value is
-               * proportionally a third as heavy and the icon reads as wire. Scaling the stroke
-               * with the size is what keeps the weight looking constant.
-               */
-              strokeWidth={1.85}
-              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-gray-300 transition-colors group-hover/dest:text-red-400"
-              aria-hidden="true"
-            />
-
-            {/* `relative` puts the text above the absolutely positioned stamp. */}
-            <span className="relative flex min-w-0 flex-col gap-0.5">
-              <span className="truncate text-sm font-semibold leading-none text-foreground">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover/dest:bg-primary/15">
+              <card.icon size={17} strokeWidth={1.8} aria-hidden="true" />
+            </span>
+            <span className="flex min-w-0 flex-col gap-0.5">
+              <span className="truncate text-xs font-semibold leading-none text-foreground">
                 {card.label}
               </span>
-              {/*
-                Live state and the static hint are different kinds of thing, so they are not
-                styled the same. A count is a reading — foreground, tabular so it cannot jitter
-                as it changes. The hint is a description of a place you have not been yet.
-              */}
-              {card.badge ? (
-                <span className="truncate text-xs font-medium tabular-nums text-foreground/75">
-                  {card.badge}
-                </span>
-              ) : (
-                <span className="truncate text-xs text-muted-foreground">{card.hint}</span>
-              )}
+              <span className="truncate text-[11px] leading-none text-muted-foreground">
+                {card.badge ?? card.hint}
+              </span>
             </span>
           </motion.button>
         ))}
