@@ -376,6 +376,7 @@ export class PlayerController {
     videoId: string,
     playbackQueue?: readonly Track[],
     autoplayWhenQueueEnds = false,
+    shufflePlaylist = false,
   ): Promise<boolean> {
     // Close out whatever was playing first: this is the funnel every track change goes
     // through, so it catches a natural end and a skip with the same one call.
@@ -397,14 +398,17 @@ export class PlayerController {
     const hadLoadedTrack = this.loadedTrackId !== null;
     this.loadedTrackId = null;
     this.pendingSeekTime = null;
-    this.setState({ status: "loading", error: null });
     try {
       if (playbackQueue?.length) {
         const startIndex = playbackQueue.findIndex((track) => track.id === videoId);
         this.queue.set([...playbackQueue], startIndex >= 0 ? startIndex : 0);
         this.autoplayEnabled = autoplayWhenQueueEnds;
         this.isPlaylistMode = !autoplayWhenQueueEnds && playbackQueue.length > 1;
+        if (shufflePlaylist && this.isPlaylistMode) {
+          this.queue.shuffleAll(this.queue.queuedManually);
+        }
       }
+      this.setState({ status: "loading", error: null });
 
       const queuedTrack = playbackQueue?.find((item) => item.id === videoId)
         ?? this.queue.all.find((item) => item.id === videoId);
@@ -611,14 +615,20 @@ export class PlayerController {
    * tracks keep their position, because someone who explicitly said "play this next" did not
    * ask for it to be moved. Turning shuffle off restores the collection's original order rather
    * than leaving the shuffled arrangement frozen in place.
+   *
+   * Enabling shuffles whenever no un-shuffle snapshot exists, even if the flag already read
+   * "on": a freshly loaded playlist behind a stale persisted flag used to skip the reorder
+   * here, so "Shuffle" picked a random start track and left the rest in playlist order.
    */
   setShuffleEnabled(enabled: boolean): void {
-    if (this.shuffleEnabled === enabled) return;
     this.shuffleEnabled = enabled;
 
     if (this.isPlaylistMode) {
-      if (enabled) this.queue.shuffleRemaining(this.queue.queuedManually);
-      else this.queue.restoreOriginalOrder(this.queue.queuedManually);
+      if (!enabled) {
+        this.queue.restoreOriginalOrder(this.queue.queuedManually);
+      } else if (!this.queue.canRestoreOriginalOrder) {
+        this.queue.shuffleRemaining(this.queue.queuedManually);
+      }
     }
 
     logInternalInfo("PlayerController.setShuffleEnabled", {
@@ -791,6 +801,13 @@ export class PlayerController {
     this.queue.shuffleRemaining(this.queue.queuedManually);
     this.emit();
     logInternalInfo("PlayerController.shuffleUpcomingQueue");
+  }
+
+  /** Shuffles the whole source playlist around the current track, played songs included. */
+  shuffleEntirePlaylist(): void {
+    this.queue.shuffleAll(this.queue.queuedManually);
+    this.emit();
+    logInternalInfo("PlayerController.shuffleEntirePlaylist");
   }
 
   clearUpcomingQueue(): void {
@@ -991,11 +1008,12 @@ export class PlayerController {
          * listener notices immediately and reads as shuffle being broken.
          */
         if (this.shuffleEnabled && this.isPlaylistMode) {
+          this.queue.shuffleForLoop();
+        } else {
           this.queue.select(0);
-          this.queue.shuffleRemaining(this.queue.queuedManually);
         }
 
-        const firstTrack = this.queue.select(0);
+        const firstTrack = this.queue.current;
         if (firstTrack) {
           logInternalInfo("PlayerController.handleTrackEnded looping queue", {
             trackCount: this.queue.all.length,

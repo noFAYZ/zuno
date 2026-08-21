@@ -171,8 +171,9 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
   const playShuffled = async () => {
     const firstTrack = shuffleTracks(tracks)[0];
     if (!firstTrack) return;
-    const started = await playerController.playTrackById(firstTrack.id, tracks);
-    if (started) playerController.setShuffleEnabled(true);
+    const started = await playerController.playTrackById(firstTrack.id, tracks, false, true);
+    if (!started) return;
+    playerController.setShuffleEnabled(true);
   };
 
   const handleAlbumSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -199,7 +200,10 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         onShuffle={() => void playShuffled()}
         loop={{
           onPlay: playInLoop,
-          isActive: isCurrentCollection && playbackOrderMode === "repeat-all",
+          onCycle: () => playerController.setPlaybackOrderMode(
+            playbackOrderMode === "repeat-all" ? "repeat-one" : "in-order",
+          ),
+          mode: isCurrentCollection ? playbackOrderMode : "in-order",
         }}
         onAddToQueue={() => playerController.addTracksToQueue(tracks)}
         onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}

@@ -67,4 +67,36 @@ equal(ids(cleared), "a,b", "clearUpcoming keeps history and the current track");
 equal(cleared.current?.id, "b", "clearUpcoming does not stop what is playing");
 equal(cleared.queuedManually, 0, "clearUpcoming empties the manual run");
 
+// shuffleAll mixes played history back into the upcoming tail — the fix for "shuffle does
+// nothing on the last track of a playlist". Current track stays put; manual entries stay put.
+const lastTrack = new Queue();
+lastTrack.set([track("a"), track("b"), track("c"), track("d"), track("e")], 4);
+equal(lastTrack.all.length - (lastTrack.currentIndex + 1), 0, "nothing is upcoming on the last track");
+lastTrack.shuffleAll(0);
+equal(lastTrack.all.length, 5, "shuffleAll keeps every track in the queue");
+equal(lastTrack.current?.id, "e", "shuffleAll pins the current track");
+equal(ids(lastTrack).split(",").sort().join(","), "a,b,c,d,e", "shuffleAll loses nothing");
+check(
+  Array.from({ length: 20 }, () => {
+    lastTrack.shuffleAll(0);
+    return ids(lastTrack);
+  }).some((order) => order !== "a,b,c,d,e"),
+  "shuffleAll actually reorders (identity every time would mean the pool is never touched)",
+);
+
+// Manual entries survive untouched and keep their count.
+const withManual = new Queue();
+withManual.set([track("a"), track("b"), track("c"), track("d"), track("e")], 2);
+withManual.add(track("m1"));
+withManual.shuffleAll(withManual.queuedManually);
+equal(ids(withManual).split(",")[0], "c", "current track moves to the front");
+equal(ids(withManual).split(",")[1], "m1", "manual entry stays right after the current track");
+equal(withManual.queuedManually, 1, "manual count survives shuffleAll");
+
+// restoreOriginalOrder undoes a whole-queue shuffle exactly.
+withManual.restoreOriginalOrder(withManual.queuedManually);
+equal(ids(withManual), "a,b,c,m1,d,e", "restoreOriginalOrder rebuilds the full pre-shuffle state");
+equal(withManual.currentIndex, 2, "restoreOriginalOrder puts the cursor back");
+equal(withManual.queuedManually, 1, "restoreOriginalOrder restores the manual count");
+
 console.log("Queue: ok");

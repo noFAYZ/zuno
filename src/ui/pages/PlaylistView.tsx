@@ -677,7 +677,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     const firstTrack = shuffleTracks(tracks)[0];
     if (!firstTrack) return;
 
-    const started = await playerController.playTrackById(firstTrack.id, tracks);
+    const started = await playerController.playTrackById(firstTrack.id, tracks, false, true);
     if (!started) return;
     playerController.setShuffleEnabled(true);
     markPlaylistPlayed(playlist.id);
@@ -767,7 +767,10 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           onShuffle={() => void playShuffled()}
           loop={{
             onPlay: () => void playInLoop(),
-            isActive: isCurrentCollection && playbackOrderMode === "repeat-all",
+            onCycle: () => playerController.setPlaybackOrderMode(
+              playbackOrderMode === "repeat-all" ? "repeat-one" : "in-order",
+            ),
+            mode: isCurrentCollection ? playbackOrderMode : "in-order",
           }}
           /*
            * Whole-collection actions page in the rest of the playlist first. Acting on the

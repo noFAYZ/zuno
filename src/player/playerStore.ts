@@ -83,6 +83,7 @@ type PlayerControllerMethod =
   | "playQueueTrackAt"
   | "moveQueueTrack"
   | "shuffleUpcomingQueue"
+  | "shuffleEntirePlaylist"
   | "clearUpcomingQueue"
   | "addTracksToQueue"
   | "setStopAfterQueueIndex"
@@ -97,10 +98,12 @@ class ActivePlayerController implements PlayerControllerActions {
     videoId: string,
     playbackQueue?: Parameters<PlayerController["playTrackById"]>[1],
     autoplayWhenQueueEnds?: Parameters<PlayerController["playTrackById"]>[2],
+    shufflePlaylist?: Parameters<PlayerController["playTrackById"]>[3],
   ) => (await tabManager.claimFocusedPlayer()).playTrackById(
     videoId,
     playbackQueue,
     autoplayWhenQueueEnds,
+    shufflePlaylist,
   );
   play = () => tabManager.getActivePlayer().play();
   pause = () => tabManager.getActivePlayer().pause();
@@ -161,6 +164,7 @@ class ActivePlayerController implements PlayerControllerActions {
     insertAfter: boolean,
   ) => tabManager.getActivePlayer().moveQueueTrack(sourceIndex, targetIndex, insertAfter);
   shuffleUpcomingQueue = () => tabManager.getActivePlayer().shuffleUpcomingQueue();
+  shuffleEntirePlaylist = () => tabManager.getActivePlayer().shuffleEntirePlaylist();
   clearUpcomingQueue = () => tabManager.getActivePlayer().clearUpcomingQueue();
   addTracksToQueue = (tracks: Parameters<PlayerController["addTracksToQueue"]>[0]) =>
     tabManager.getActivePlayer().addTracksToQueue(tracks);

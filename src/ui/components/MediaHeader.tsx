@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { CheckIcon, DownloadIcon, ListIcon, PauseActiveIcon, PlayActiveIcon, PlaylistAddIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { CheckIcon, DownloadIcon, ListIcon, PauseActiveIcon, PlayActiveIcon, PlaylistAddIcon, RepeatActiveIcon, RepeatOneActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
 import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
@@ -95,10 +95,12 @@ interface MediaHeaderProps {
   };
   /** Play-from-the-top-on-repeat. Omit to hide the control. */
   loop?: {
-    /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
+    /** Starts this collection with repeat-all enabled. */
     onPlay: () => void;
-    /** Reflects repeat-all being active for this collection. */
-    isActive?: boolean;
+    /** Cycles repeat-all → repeat-one → off when this collection is already playing. */
+    onCycle?: () => void;
+    /** Current loop mode for the icon and accessible label. */
+    mode?: "in-order" | "repeat-all" | "repeat-one";
   };
   actionsDisabled?: boolean;
   /** Extra controls beside play/shuffle, e.g. Subscribe. */
@@ -143,7 +145,8 @@ export function MediaHeader({
   const isLoading = playback?.isLoading ?? false;
   const downloadBusy = download?.isBusy ?? false;
   const downloadCounts = download?.counts;
-  const isLooping = loop?.isActive ?? false;
+  const loopMode = loop?.mode ?? "in-order";
+  const isLooping = loopMode !== "in-order";
   /*
    * The wash is painted by Layout, which sits above the scroll container this header lives
    * in — it has to start behind the search bar, and anything drawn here would be clipped at
@@ -229,13 +232,13 @@ export function MediaHeader({
           ) : null}
 
           {loop ? (
-            <Tooltip content="Play from the top and start over when it ends">
+            <Tooltip content={loopMode === "repeat-one" ? "Loop current song" : loopMode === "repeat-all" ? "Loop the whole playlist" : "Loop the whole playlist"}>
               <button
                 type="button"
                 disabled={actionsDisabled}
-                onClick={loop.onPlay}
+                onClick={isLooping && loop.onCycle ? loop.onCycle : loop.onPlay}
                 aria-pressed={isLooping}
-                aria-label="Play in loop"
+                aria-label={loopMode === "repeat-one" ? "Loop current song" : loopMode === "repeat-all" ? "Loop queue" : "Play in loop"}
                 className={cn(
                   "flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
                   "disabled:pointer-events-none disabled:opacity-50",
@@ -245,8 +248,12 @@ export function MediaHeader({
                     : "bg-card text-foreground hover:bg-muted",
                 )}
               >
-                <RepeatActiveIcon size={18} aria-hidden="true" />
-                Loop
+                {loopMode === "repeat-one" ? (
+                  <RepeatOneActiveIcon size={18} aria-hidden="true" />
+                ) : (
+                  <RepeatActiveIcon size={18} aria-hidden="true" />
+                )}
+                {loopMode === "repeat-one" ? "Loop one" : loopMode === "repeat-all" ? "Loop all" : "Loop"}
               </button>
             </Tooltip>
           ) : null}

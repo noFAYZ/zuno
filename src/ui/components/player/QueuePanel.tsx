@@ -7,6 +7,7 @@ import {
   DiceIcon,
   PauseIcon,
   PlaylistAddIcon,
+  ShuffleActiveIcon,
   ShuffleIcon,
   TrashIcon,
 } from "@/ui/icons";
@@ -708,6 +709,16 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
               >
                 <ShuffleIcon size={16} aria-hidden="true" />
                 <span className="sr-only">Shuffle what's next</span>
+              </button>
+            </Tooltip>
+            <Tooltip content="Shuffle the whole playlist">
+              <button
+                type="button"
+                className={ICON_BUTTON}
+                onClick={() => playerController.shuffleEntirePlaylist()}
+              >
+                <ShuffleActiveIcon size={16} aria-hidden="true" />
+                <span className="sr-only">Shuffle the whole playlist</span>
               </button>
             </Tooltip>
             <Tooltip content="Save the queue as a playlist">

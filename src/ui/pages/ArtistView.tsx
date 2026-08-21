@@ -223,8 +223,9 @@ export function ArtistView({
     const songs = page?.allSongs ?? [];
     const firstTrack = shuffleTracks(songs)[0];
     if (!firstTrack) return;
-    const started = await playerController.playTrackById(firstTrack.id, songs);
-    if (started) playerController.setShuffleEnabled(true);
+    const started = await playerController.playTrackById(firstTrack.id, songs, false, true);
+    if (!started) return;
+    playerController.setShuffleEnabled(true);
   };
 
   /**
