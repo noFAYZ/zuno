@@ -277,7 +277,7 @@ export function HomePage({
     >
         
       <div className="flex items-center justify-between gap-3">
-        <h3>Made for you</h3>
+        <h3 className="text-2xl">Made for you</h3>
       </div>
       {/*
         The picks ride the inside of a cylinder instead of sitting in a grid: the row recedes
@@ -367,7 +367,7 @@ export function HomePage({
 
       {compactRecent.length === 0 && isWaitingForLibrary && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">Recently played</h2>
+          <h2 className="text-2xl font-semibold text-foreground">Recently played</h2>
           <div
             className="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(16rem,1fr))]"
             role="status"
@@ -382,7 +382,7 @@ export function HomePage({
 
       {compactRecent.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">Recently played</h2>
+          <h2 className="text-2xl font-semibold text-foreground">Recently played</h2>
           <div className="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(16rem,1fr))]">
             {compactRecent.map((track) => (
               <button
@@ -411,14 +411,14 @@ export function HomePage({
 
       {moreSuggestions.length === 0 && isLoadingSuggestions && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">More recommendations</h2>
+          <h2 className="text-2xl font-semibold text-foreground">More recommendations</h2>
           <AlbumGridSkeleton count={MORE_SUGGESTIONS_COUNT} label="Loading more recommendations" />
         </section>
       )}
 
       {moreSuggestions.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">More recommendations</h2>
+          <h2 className="text-2xl font-semibold text-foreground">More recommendations</h2>
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
             {moreSuggestions.map((track) => (
               <AlbumCard
@@ -436,14 +436,14 @@ export function HomePage({
 
       {largeRecent.length === 0 && isWaitingForLibrary && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">Listen again</h2>
+          <h2 className="text-2xl font-semibold text-foreground">Listen again</h2>
           <AlbumGridSkeleton count={RECENT_LARGE_COUNT} label="Loading listen again" />
         </section>
       )}
 
       {largeRecent.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h2 className="text-xl font-semibold text-foreground">Listen again</h2>
+          <h2 className="text-2xl font-semibold text-foreground">Listen again</h2>
           <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
             {largeRecent.map((track) => (
               <AlbumCard
