@@ -1679,38 +1679,26 @@ export class PlayerController {
     const currentTrack = this.state.currentTrack;
     logInternalDebug("updateDiscordPresence", { status: this.state.status, hasTrack: !!currentTrack });
     
-    // Clear presence if idle or error
-    if (this.state.status === "idle" || this.state.status === "error" || !currentTrack) {
-      logInternalDebug("Discord.clearPresence", {});
-      void DiscordRpcService.clearPresence();
+    if (!currentTrack || (this.state.status !== "playing" && this.state.status !== "paused")) {
+      void DiscordRpcService.syncPresence(null, this.state.status);
       return;
     }
 
-    // Update presence with current track info
-    if (this.state.status === "playing" || this.state.status === "paused") {
-      const currentTime = this.loadedTrackId === currentTrack.id 
-        ? this.audioEngine.getCurrentTime() 
-        : (this.pendingSeekTime ?? 0);
-
-      logInternalDebug("Discord.updatePresence", {
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        status: this.state.status,
-      });
-
-      void DiscordRpcService.updatePresence({
-        title: currentTrack.title,
-        artist: currentTrack.artist,
-        album: currentTrack.album ?? "",
-        artworkUrl: getDiscordArtworkUrl(currentTrack),
-        songUrl: getYouTubeMusicTrackUrl(currentTrack),
-        artistUrl: getYouTubeMusicArtistUrl(currentTrack),
-        albumUrl: getYouTubeMusicAlbumUrl(currentTrack),
-        duration: Math.floor(currentTrack.durationSec ?? 0),
-        currentTime: Math.floor(Math.max(0, currentTime)),
-        isPlaying: this.state.status === "playing",
-      });
-    }
+    const currentTime = this.loadedTrackId === currentTrack.id
+      ? this.audioEngine.getCurrentTime()
+      : (this.pendingSeekTime ?? 0);
+    void DiscordRpcService.syncPresence({
+      title: currentTrack.title,
+      artist: currentTrack.artist,
+      album: currentTrack.album ?? "",
+      artworkUrl: getDiscordArtworkUrl(currentTrack),
+      songUrl: getYouTubeMusicTrackUrl(currentTrack),
+      artistUrl: getYouTubeMusicArtistUrl(currentTrack),
+      albumUrl: getYouTubeMusicAlbumUrl(currentTrack),
+      duration: Math.floor(currentTrack.durationSec ?? 0),
+      currentTime: Math.floor(Math.max(0, currentTime)),
+      isPlaying: this.state.status === "playing",
+    }, this.state.status);
   }
 
   async seekTo(time: number): Promise<void> {

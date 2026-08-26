@@ -197,7 +197,10 @@ import {
 } from "../../player/localPlaylists";
 import { LastFmService, type LastFmAuthStart, type LastFmSessionStatus } from "../../player/LastFm";
 import { DiscordRpcService } from "../../player/DiscordRPC";
-import { useDiscordPresenceEnabled } from "../settings/discord";
+import {
+  useDiscordHideWhenPaused,
+  useDiscordPresenceEnabled,
+} from "../settings/discord";
 import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
@@ -791,6 +794,7 @@ export function SettingsPage({
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
   const discordPresenceEnabled = useDiscordPresenceEnabled();
+  const discordHideWhenPaused = useDiscordHideWhenPaused();
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
     getLocalPlaylists,
@@ -1361,6 +1365,13 @@ export function SettingsPage({
                 description="Publishes the current track, artist and artwork to your Discord profile. Turning this off clears whatever is showing there now."
                 checked={discordPresenceEnabled}
                 onCheckedChange={(enabled) => void DiscordRpcService.setEnabled(enabled)}
+              />
+              <SettingToggle
+                title="Hide status when paused"
+                description="Clear your Discord Rich Presence while playback is paused. It returns when playback resumes."
+                checked={discordHideWhenPaused}
+                disabled={!discordPresenceEnabled}
+                onCheckedChange={(hidden) => void DiscordRpcService.setHideWhenPaused(hidden)}
               />
             </div>
           </section>
