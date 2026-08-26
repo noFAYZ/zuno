@@ -102,6 +102,11 @@ import {
   usePotatoPcMode,
 } from "../settings/renderEffects";
 import { setMadeForYouVisible, useMadeForYouVisible } from "../settings/homeSections";
+import {
+  SettingsSearch,
+  SettingsSearchResults,
+  type SettingsTab,
+} from "../components/SettingsSearch";
 import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { ExternalLinkButton } from "../components/ExternalLinkButton";
 import {
@@ -655,8 +660,6 @@ function SettingsCardHeader({
 }
 
 /** Quiet outbound links in the page header. */
-type SettingsTab = "about" | "appearance" | "playback" | "system" | "shortcuts" | "window";
-
 type WindowControlStyle = "macos" | "windows" | "native";
 
 const SETTINGS_TABS: Array<{
@@ -738,6 +741,7 @@ export function SettingsPage({
   const [lastFmBusy, setLastFmBusy] = useState(false);
   const [lastFmError, setLastFmError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("about");
+  const [settingsQuery, setSettingsQuery] = useState("");
   const themePreference = useThemePreference();
   const [listeningShortcut, setListeningShortcut] = useState<KeyboardShortcutAction | null>(null);
   const keyboardShortcuts = useKeyboardShortcuts();
@@ -1122,8 +1126,8 @@ export function SettingsPage({
   };
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col gap-7">
-      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+    <main className="@container/settings flex min-h-0 flex-1 flex-col gap-7">
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3 @max-4xl/settings:flex-col @max-4xl/settings:items-stretch">
         <div className="flex flex-col gap-1.5">
           <h1>Settings</h1>
           <p className="text-sm text-muted-foreground">
@@ -1136,7 +1140,10 @@ export function SettingsPage({
           part of the description above and were routinely missed. They stay unfilled so they
           still sit below the category nav in the hierarchy.
         */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 @max-4xl/settings:justify-start">
+          <div className="w-72 max-w-full @max-4xl/settings:w-full">
+            <SettingsSearch query={settingsQuery} onQueryChange={setSettingsQuery} />
+          </div>
           <ExternalLinkButton
             icon={<StarIcon size={16} aria-hidden="true" />}
             label="Star on GitHub"
@@ -1150,12 +1157,11 @@ export function SettingsPage({
         </div>
       </header>
 
-      {/* Vertical nav rather than a pill row: it has room for a description per
-          category and scales as sections are added, the way desktop settings do.
-          The nav sticks so the categories stay reachable while a long panel scrolls. */}
-      <div className="flex min-h-0 flex-1 items-start gap-10">
+      {/* The category rail follows this pane's width, not the application viewport: an embedded
+          or scaled Settings pane can be narrow even on a wide desktop window. */}
+      <div className="flex min-h-0 flex-1 items-start gap-10 @max-4xl/settings:flex-col @max-4xl/settings:gap-4">
         <nav
-          className="sticky top-0 flex w-56 shrink-0 flex-col gap-0.5"
+          className="sticky top-0 flex w-56 shrink-0 flex-col gap-0.5 @max-4xl/settings:relative @max-4xl/settings:w-full @max-4xl/settings:flex-row @max-4xl/settings:overflow-x-auto @max-4xl/settings:rounded-xl @max-4xl/settings:bg-card/50 @max-4xl/settings:p-1"
           role="tablist"
           aria-label="Settings categories"
         >
@@ -1170,7 +1176,7 @@ export function SettingsPage({
                 aria-selected={isActive}
                 onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  "group/tab relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors",
+                  "group/tab relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors @max-4xl/settings:shrink-0 @max-4xl/settings:px-2.5 @max-4xl/settings:py-2",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                   isActive ? "text-foreground" : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
                 )}
@@ -1192,7 +1198,7 @@ export function SettingsPage({
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-medium">{tab.label}</span>
-                  <span className="block truncate text-xs text-muted-foreground">
+                  <span className="block truncate text-xs text-muted-foreground @max-4xl/settings:hidden">
                     {tab.description}
                   </span>
                 </span>
@@ -1201,8 +1207,17 @@ export function SettingsPage({
           })}
         </nav>
 
-        <div className="flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col">
-
+        <div className="flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col @max-4xl/settings:max-w-none">
+          {settingsQuery.trim() ? (
+            <SettingsSearchResults
+              query={settingsQuery}
+              onSelect={(tab) => {
+                setActiveTab(tab);
+                setSettingsQuery("");
+              }}
+            />
+          ) : (
+            <>
       {activeTab === "about" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="About settings">
           <section className={SETTINGS_CARD} aria-labelledby="account-settings-title">
@@ -2373,7 +2388,8 @@ export function SettingsPage({
           </section>
         </div>
       )}
-
+            </>
+          )}
         </div>
       </div>
     </main>
