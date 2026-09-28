@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { PlayerStatus } from "./PlayerController";
+import { createSerialQueue } from "../internal/asyncQueue";
 import { logInternalDebug, logInternalWarn } from "../internal/logging";
 import {
+  getDiscordHideWhenPaused,
   getDiscordPresenceEnabled,
+  setDiscordHideWhenPaused as saveDiscordHideWhenPaused,
   setDiscordPresenceEnabled,
 } from "../ui/settings/discord";
 
@@ -13,10 +17,16 @@ export interface DiscordPresenceData {
   songUrl?: string;
   artistUrl?: string;
   albumUrl?: string;
-  duration: number; // in seconds
-  currentTime: number; // in seconds
+  duration: number;
+  currentTime: number;
   isPlaying: boolean;
 }
+
+type PresenceSnapshot = { data: DiscordPresenceData; status: PlayerStatus } | null;
+type PresenceTransport = {
+  clear: () => Promise<void>;
+  update: (data: DiscordPresenceData) => Promise<void>;
+};
 
 const DISCORD_TEXT_LIMIT = 128;
 const DISCORD_ASSET_URL_LIMIT = 256;
@@ -42,11 +52,9 @@ function sanitizeArtworkUrl(value?: string): string | undefined {
 
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== "https:") return undefined;
-    if (!TRUSTED_ARTWORK_HOSTS.has(parsed.hostname)) return undefined;
+    if (parsed.protocol !== "https:" || !TRUSTED_ARTWORK_HOSTS.has(parsed.hostname)) return undefined;
     const url = parsed.toString();
-    if (url.length > DISCORD_ASSET_URL_LIMIT) return undefined;
-    return url;
+    return url.length <= DISCORD_ASSET_URL_LIMIT ? url : undefined;
   } catch {
     return undefined;
   }
@@ -57,8 +65,7 @@ function sanitizePresenceLink(value?: string): string | undefined {
 
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== "https:") return undefined;
-    if (!TRUSTED_PRESENCE_LINK_HOSTS.has(parsed.hostname)) return undefined;
+    if (parsed.protocol !== "https:" || !TRUSTED_PRESENCE_LINK_HOSTS.has(parsed.hostname)) return undefined;
     return parsed.toString();
   } catch {
     return undefined;
@@ -69,6 +76,15 @@ function sanitizePresenceLink(value?: string): string | undefined {
 export function presenceDedupeKey(data: DiscordPresenceData): string {
   const { currentTime: _currentTime, ...rest } = data;
   return JSON.stringify(rest);
+}
+
+export function shouldClearPresence(
+  status: PlayerStatus,
+  hasTrack: boolean,
+  hideWhenPaused: boolean,
+): boolean {
+  return !hasTrack || status === "idle" || status === "error" || status === "loading" ||
+    (status === "paused" && hideWhenPaused);
 }
 
 function sanitizePresenceData(data: DiscordPresenceData): DiscordPresenceData {
@@ -87,116 +103,115 @@ function sanitizePresenceData(data: DiscordPresenceData): DiscordPresenceData {
 }
 
 /**
- * Manages Discord Rich Presence integration
- * Calls Tauri commands that handle the actual Discord connection in Rust
+ * Serializes presence commands and coalesces bursts to their latest desired state.
+ * `publishedKey` is undefined before the first command, null after a clear, or the last sent
+ * track key. One field deliberately models all three states, so clear/update dedupe cannot drift.
  */
-export class DiscordRpcService {
-  /**
-   * Read per call rather than cached, so toggling the setting takes effect on the next track
-   * update without anything having to notify this service.
-   */
-  private static get isEnabled(): boolean {
-    return getDiscordPresenceEnabled();
+export function createPresenceSynchronizer(transport: PresenceTransport) {
+  let latest: PresenceSnapshot = null;
+  let enabled = true;
+  let hideWhenPaused = false;
+  let publishedKey: string | null | undefined;
+  const enqueue = createSerialQueue();
+
+  async function publishLatest(): Promise<void> {
+    if (!latest || !enabled || shouldClearPresence(latest.status, true, hideWhenPaused)) {
+      if (publishedKey === null) return;
+      try {
+        await transport.clear();
+        publishedKey = null;
+      } catch {
+        // Keep the old state so the next sync retries it.
+      }
+      return;
+    }
+
+    const data = sanitizePresenceData(latest.data);
+    const key = presenceDedupeKey(data);
+    if (key === publishedKey) return;
+    try {
+      await transport.update(data);
+      publishedKey = key;
+    } catch {
+      // Keep the old state so the next sync retries it.
+    }
   }
 
-  /**
-   * The last payload actually sent, everything but `currentTime`.
-   *
-   * `PlayerController.emit()` fires on every state change — a queue reorder, a rate change, a
-   * sleep timer — most of which leave the track and play state untouched. Discord runs its own
-   * clock off the timestamps `discord_rpc.rs` derives from `currentTime`, so it never needed
-   * repolling either; comparing on everything else and always excluding `currentTime` is what
-   * turns those into no-ops instead of a fresh IPC round trip (and a jittered progress bar) on
-   * every unrelated change.
-   */
-  private static lastSentKey: string | null = null;
+  return {
+    sync(next: PresenceSnapshot, options: { enabled: boolean; hideWhenPaused: boolean }): Promise<void> {
+      latest = next;
+      enabled = options.enabled;
+      hideWhenPaused = options.hideWhenPaused;
+      return enqueue(publishLatest);
+    },
+  };
+}
 
-  /**
-   * Initialize Discord RPC
-   * The actual connection happens on the Rust backend
-   */
+/** Manages Discord Rich Presence and owns its playback-to-presence policy. */
+export class DiscordRpcService {
+  private static lastPlayback: PresenceSnapshot = null;
+  private static synchronizer = createPresenceSynchronizer({
+    async clear() {
+      try {
+        logInternalDebug("Discord.clearPresence", {});
+        await invoke("discord_rpc_clear");
+        logInternalDebug("Discord.clearPresence.success", {});
+      } catch (error) {
+        logInternalWarn("Discord.clearPresence.failed", error as Record<string, unknown>);
+        throw error;
+      }
+    },
+    async update(data) {
+      try {
+        logInternalDebug("Discord.updatePresence", {
+          title: data.title,
+          artist: data.artist,
+          isPlaying: data.isPlaying,
+        });
+        await invoke("discord_rpc_update", {
+          title: data.title,
+          artist: data.artist,
+          album: data.album,
+          artworkUrl: data.artworkUrl,
+          songUrl: data.songUrl,
+          artistUrl: data.artistUrl,
+          albumUrl: data.albumUrl,
+          duration: data.duration,
+          currentTime: data.currentTime,
+          isPlaying: data.isPlaying,
+        });
+        logInternalDebug("Discord.updatePresence.success", {});
+      } catch (error) {
+        logInternalWarn("Discord.updatePresence.failed", error as Record<string, unknown>);
+        throw error;
+      }
+    },
+  });
+
   static async init(): Promise<void> {
     logInternalDebug("Discord.init", { message: "Rust backend will handle connection" });
   }
 
-  /**
-   * Stops publishing presence and wipes whatever is already showing.
-   *
-   * Turning the setting off has to clear as well as stop: presence persists on Discord's side
-   * until something replaces it, so without this the last track stays on the user's profile
-   * indefinitely — the opposite of what switching it off is asking for.
-   */
+  static async setHideWhenPaused(hidden: boolean): Promise<void> {
+    saveDiscordHideWhenPaused(hidden);
+    await this.syncLatest();
+  }
+
+  static async syncPresence(data: DiscordPresenceData | null, status: PlayerStatus): Promise<void> {
+    this.lastPlayback = data ? { data, status } : null;
+    await this.syncLatest();
+  }
+
   static async setEnabled(enabled: boolean): Promise<void> {
     setDiscordPresenceEnabled(enabled);
-    if (enabled) return;
-
-    try {
-      await invoke("discord_rpc_clear");
-      this.lastSentKey = null;
-      logInternalDebug("Discord.setEnabled cleared presence", {});
-    } catch (error) {
-      logInternalWarn("Discord.setEnabled.clearFailed", error as Record<string, unknown>);
-    }
+    await this.syncLatest();
   }
 
-  /**
-   * Update Discord presence with current track information
-   * @param data The current track and playback information
-   */
-  static async updatePresence(data: DiscordPresenceData): Promise<void> {
-    if (!this.isEnabled) {
-      return;
-    }
-
-    const safeData = sanitizePresenceData(data);
-    const nextKey = presenceDedupeKey(safeData);
-    if (nextKey === this.lastSentKey) return;
-
-    try {
-      logInternalDebug("Discord.updatePresence", {
-        title: safeData.title,
-        artist: safeData.artist,
-        isPlaying: safeData.isPlaying,
-      });
-
-      // Call Tauri command to update presence in Rust backend
-      await invoke("discord_rpc_update", {
-        title: safeData.title,
-        artist: safeData.artist,
-        album: safeData.album,
-        artworkUrl: safeData.artworkUrl,
-        songUrl: safeData.songUrl,
-        artistUrl: safeData.artistUrl,
-        albumUrl: safeData.albumUrl,
-        duration: safeData.duration,
-        currentTime: safeData.currentTime,
-        isPlaying: safeData.isPlaying,
-      });
-
-      this.lastSentKey = nextKey;
-      logInternalDebug("Discord.updatePresence.success", {});
-    } catch (error) {
-      logInternalWarn("Discord.updatePresence.failed", error as Record<string, unknown>);
-    }
-  }
-  /**
-   * Clear Discord presence (show as idle)
-   */
-  static async clearPresence(): Promise<void> {
-    if (!this.isEnabled) {
-      return;
-    }
-
-    try {
-      logInternalDebug("Discord.clearPresence", {});
-      await invoke("discord_rpc_clear");
-      // The next real track has to go out even if it matches whatever was showing before
-      // the clear.
-      this.lastSentKey = null;
-      logInternalDebug("Discord.clearPresence.success", {});
-    } catch (error) {
-      logInternalWarn("Discord.clearPresence.failed", error as Record<string, unknown>);
-    }
+  private static syncLatest(): Promise<void> {
+    return this.synchronizer.sync(this.lastPlayback, {
+      enabled: getDiscordPresenceEnabled(),
+      hideWhenPaused: getDiscordHideWhenPaused(),
+    });
   }
 }
 
