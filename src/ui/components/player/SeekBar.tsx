@@ -266,7 +266,7 @@ export function SeekBar() {
         } as React.CSSProperties}
         aria-label="Seek"
       />
-      <span className="w-10 shrink-0 text-xs tabular-nums text-muted-foreground">
+      <span className="w-10 shrink-0 text-xs tabular-nums text-muted-foreground mr-4">
         {formatTime(duration)}
       </span>
     </div>
