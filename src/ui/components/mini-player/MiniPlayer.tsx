@@ -12,7 +12,13 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { emit } from "@tauri-apps/api/event";
-import { cursorPosition, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import {
+  currentMonitor,
+  cursorPosition,
+  getCurrentWindow,
+  LogicalSize,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 import { SpinnerSteps } from "@/components/motion/loader";
 import {
   ArrowUpIcon,
@@ -86,8 +92,10 @@ export default function MiniPlayer() {
   const [isDragging, setIsDragging] = useState(false);
   const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
   const [volumePreview, setVolumePreview] = useState<number | null>(null);
+  const [anchorTop, setAnchorTop] = useState(false);
   const hoverAction = useMiniPlayerHoverAction();
   const expandedRef = useRef(false);
+  const anchorTopRef = useRef(false);
   const dragTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seekPreviewClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const volumePreviewClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -315,9 +323,28 @@ export default function MiniPlayer() {
     }
   }, [hoverAction]);
 
+  /*
+   * The window is always as tall as the expanded capsule, and the capsule grows into that
+   * spare room. Anchored to the bottom it grows upward, which suits the default spot near the
+   * bottom of the screen. In the top half the spare room would sit above the pill and keep it
+   * from reaching the top edge, so there it anchors to the top and grows downward instead.
+   */
+  const updateAnchor = async (windowY: number) => {
+    try {
+      const [monitor, size] = await Promise.all([currentMonitor(), win.outerSize()]);
+      if (!monitor) return;
+      const top = windowY + size.height / 2 < monitor.position.y + monitor.size.height / 2;
+      anchorTopRef.current = top;
+      setAnchorTop(top);
+    } catch (_) {}
+  };
+
   useEffect(() => {
+    void win.outerPosition().then((position) => updateAnchor(position.y), () => {});
+
     const setup = async () => {
       const unlisten = await win.onMoved(({ payload }) => {
+        void updateAnchor(payload.y);
         const nextPosition = { x: payload.x, y: payload.y };
         if (windowRectRef.current) {
           windowRectRef.current = { ...windowRectRef.current, ...nextPosition };
@@ -373,7 +400,9 @@ export default function MiniPlayer() {
           (expandedRef.current ? EXPANDED_CAPSULE_HEIGHT : COLLAPSED_HEIGHT) * scale;
         const capsuleWidth = capsuleWidthRef.current * scale;
         const capsuleCenterX = rect.x + rect.width / 2;
-        const capsuleBottom = rect.y + rect.height - WINDOW_PADDING * scale;
+        const capsuleBottom = anchorTopRef.current
+          ? rect.y + WINDOW_PADDING * scale + capsuleHeight
+          : rect.y + rect.height - WINDOW_PADDING * scale;
 
         // Once open, the region the cursor must leave is deliberately bigger than the one
         // it had to enter. See HOVER_RELEASE_SLACK.
@@ -805,8 +834,11 @@ export default function MiniPlayer() {
   return (
     <div
       ref={wrapperRef}
-      className="flex h-full w-full items-end justify-center bg-transparent"
-      style={{ paddingBottom: WINDOW_PADDING }}
+      className={cn(
+        "flex h-full w-full justify-center bg-transparent",
+        anchorTop ? "items-start" : "items-end",
+      )}
+      style={anchorTop ? { paddingTop: WINDOW_PADDING } : { paddingBottom: WINDOW_PADDING }}
       onBlur={handleMacFocusOut}
     >
       {/*
