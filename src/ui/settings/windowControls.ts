@@ -10,6 +10,7 @@ import {
 const WINDOWS_STYLE_STORAGE_KEY = "windows-style-window-controls";
 const NATIVE_CONTROLS_STORAGE_KEY = "native-window-controls";
 const FORCE_CONTROLS_STORAGE_KEY = "force-window-controls-on-tiling-wm";
+const WINDOW_OUTLINE_STORAGE_KEY = "window-outline-visible";
 const CHANGE_EVENT = "window-controls-change";
 
 function readBooleanSetting(key: string) {
@@ -48,6 +49,13 @@ function readForceWindowControls() {
   return readBooleanSetting(FORCE_CONTROLS_STORAGE_KEY);
 }
 
+function readWindowOutline() {
+  // Default on, so the frameless window keeps the edge it has always had. Some desktops
+  // already separate windows well (shadows, a dark wallpaper), where the light hairline
+  // reads as a stray white border, so this lets it go.
+  return readLocalBooleanSetting(WINDOW_OUTLINE_STORAGE_KEY, true);
+}
+
 function emitWindowControlsChange() {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
@@ -63,6 +71,10 @@ export function setNativeWindowControls(enabled: boolean) {
 
 export function setForceWindowControls(enabled: boolean) {
   writeBooleanSetting(FORCE_CONTROLS_STORAGE_KEY, enabled);
+}
+
+export function setWindowOutline(visible: boolean) {
+  writeBooleanSetting(WINDOW_OUTLINE_STORAGE_KEY, visible);
 }
 
 export async function applyNativeWindowControls(enabled = readNativeWindowControls()) {
@@ -87,6 +99,7 @@ export async function hydrateWindowControlSettings() {
       () => applyNativeWindowControls(),
     ),
     hydrateLocalBooleanSetting(FORCE_CONTROLS_STORAGE_KEY, false, CHANGE_EVENT),
+    hydrateLocalBooleanSetting(WINDOW_OUTLINE_STORAGE_KEY, true, CHANGE_EVENT),
   ]);
 }
 
@@ -100,4 +113,8 @@ export function useNativeWindowControls() {
 
 export function useForceWindowControls() {
   return useSyncExternalStore(subscribe, readForceWindowControls, () => false);
+}
+
+export function useWindowOutline() {
+  return useSyncExternalStore(subscribe, readWindowOutline, () => true);
 }

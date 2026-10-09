@@ -127,9 +127,11 @@ import {
 import {
   setForceWindowControls,
   setNativeWindowControls,
+  setWindowOutline,
   setWindowsStyleWindowControls,
   useForceWindowControls,
   useNativeWindowControls,
+  useWindowOutline,
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
 import {
@@ -647,6 +649,7 @@ export function SettingsPage({
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const nativeWindowControls = useNativeWindowControls();
   const forceWindowControls = useForceWindowControls();
+  const windowOutline = useWindowOutline();
   const tilingWindowManager = useSyncExternalStore(
     subscribeTilingWindowManager,
     isTilingWindowManager,
@@ -1755,15 +1758,6 @@ export function SettingsPage({
 
             {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
 
-
-            <SettingToggle
-              title="Minimize to tray"
-              description="Closing the window hides Zuno to the system tray and keeps playing. When off, no tray icon is shown."
-              checked={minimizeToTray}
-              onCheckedChange={setMinimizeToTray}
-            />
-
-
             <SettingToggle
               title="Remember window size and location"
               description="Reopen the main window with its last size and screen position."
@@ -2011,6 +2005,14 @@ export function SettingsPage({
               )}
             </SettingRow>
 
+            {/* Next to the window buttons, because it decides what the close button does. */}
+            <SettingToggle
+              title="Minimize to tray"
+              description="Closing the window hides Zuno to the system tray and keeps playing. When off, no tray icon is shown."
+              checked={minimizeToTray}
+              onCheckedChange={setMinimizeToTray}
+            />
+
             {/* Only reachable when it does something: hidden once native chrome takes over,
                 and off tiling compositors the buttons already show without this. */}
             {isLinux && tilingWindowManager && windowControlStyle !== "native" && (
@@ -2019,6 +2021,16 @@ export function SettingsPage({
                 description="Tiling compositors don't draw window buttons for apps, so they're hidden by default. Turn this on to show them anyway."
                 checked={forceWindowControls}
                 onCheckedChange={setForceWindowControls}
+              />
+            )}
+
+            {/* The OS frame replaces the outline, so the switch would do nothing there. */}
+            {windowControlStyle !== "native" && (
+              <SettingToggle
+                title="Window outline"
+                description="Draw a thin edge around the window so it stands apart from what's behind it."
+                checked={windowOutline}
+                onCheckedChange={setWindowOutline}
               />
             )}
 
