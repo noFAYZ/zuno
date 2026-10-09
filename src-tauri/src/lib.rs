@@ -5433,6 +5433,8 @@ pub fn run() {
             if let Err(error) = initialize_app_log(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] {}", error.message);
             }
+            #[cfg(target_os = "linux")]
+            linux_media::mirror_volume(app.handle());
             // Always built, so toggling the setting takes effect without a restart.
             if let Err(error) = build_tray(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] tray unavailable: {error}");
