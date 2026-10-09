@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Window } from "@tauri-apps/api/window";
 /*
  * Statically imported, deliberately.
  *
@@ -3129,7 +3129,9 @@ export class YouTubeMusicDataSource extends DataSource {
    * sign-in completed, and it is not worth an error.
    */
   async cancelSignIn(): Promise<void> {
-    const loginWindow = await WebviewWindow.getByLabel(YOUTUBE_LOGIN_WINDOW_LABEL);
+    // A plain Window lookup: the sign-in window holds an address bar and the page as two
+    // child webviews, so no webview carries the window's own label.
+    const loginWindow = await Window.getByLabel(YOUTUBE_LOGIN_WINDOW_LABEL);
     if (!loginWindow) return;
     try {
       await loginWindow.close();

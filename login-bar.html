@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zuno Sign-in Address</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { margin: 0; box-sizing: border-box; }
+      html, body { height: 100%; overflow: hidden; }
+      body {
+        display: flex;
+        align-items: center;
+        padding: 0 8px;
+        background: Canvas;
+      }
+      input {
+        width: 100%;
+        height: 26px;
+        padding: 0 12px;
+        border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+        border-radius: 13px;
+        background: color-mix(in srgb, CanvasText 5%, Canvas);
+        color: CanvasText;
+        font: 13px system-ui, sans-serif;
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <input id="address" readonly spellcheck="false" aria-label="Address" />
+    <script>
+      // Called from Rust on every page load of the sign-in webview below. This page has no
+      // IPC access and the sign-in page cannot reach it, so only the app writes this value.
+      window.showUrl = (url) => {
+        document.getElementById("address").value = url === "about:blank" ? "" : url;
+      };
+    </script>
+  </body>
+</html>
