@@ -8,10 +8,17 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
+  type WheelEvent,
 } from "react";
 import { cn } from "@/lib/utils";
 import { emit } from "@tauri-apps/api/event";
-import { cursorPosition, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import {
+  currentMonitor,
+  cursorPosition,
+  getCurrentWindow,
+  LogicalSize,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 import { SpinnerSteps } from "@/components/motion/loader";
 import {
   ArrowUpIcon,
@@ -25,7 +32,7 @@ import { saveMiniPlayerPosition, useMiniPlayerHoverAction } from "../../settings
 import { isLinux, isMacOS, isWindows } from "../../platform";
 import { Marquee } from "@/components/motion/marquee";
 import { TrackArtwork } from "../TrackArtwork";
-import { restoreMainWindow, useMiniPlayerBridge } from "./useMiniPlayerBridge";
+import { restoreMainWindow, showMiniPlayerCloseMenu, useMiniPlayerBridge } from "./useMiniPlayerBridge";
 
 const win = getCurrentWindow();
 
@@ -85,8 +92,10 @@ export default function MiniPlayer() {
   const [isDragging, setIsDragging] = useState(false);
   const [seekPreviewTime, setSeekPreviewTime] = useState<number | null>(null);
   const [volumePreview, setVolumePreview] = useState<number | null>(null);
+  const [anchorTop, setAnchorTop] = useState(false);
   const hoverAction = useMiniPlayerHoverAction();
   const expandedRef = useRef(false);
+  const anchorTopRef = useRef(false);
   const dragTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seekPreviewClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const volumePreviewClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -314,9 +323,28 @@ export default function MiniPlayer() {
     }
   }, [hoverAction]);
 
+  /*
+   * The window is always as tall as the expanded capsule, and the capsule grows into that
+   * spare room. Anchored to the bottom it grows upward, which suits the default spot near the
+   * bottom of the screen. In the top half the spare room would sit above the pill and keep it
+   * from reaching the top edge, so there it anchors to the top and grows downward instead.
+   */
+  const updateAnchor = async (windowY: number) => {
+    try {
+      const [monitor, size] = await Promise.all([currentMonitor(), win.outerSize()]);
+      if (!monitor) return;
+      const top = windowY + size.height / 2 < monitor.position.y + monitor.size.height / 2;
+      anchorTopRef.current = top;
+      setAnchorTop(top);
+    } catch (_) {}
+  };
+
   useEffect(() => {
+    void win.outerPosition().then((position) => updateAnchor(position.y), () => {});
+
     const setup = async () => {
       const unlisten = await win.onMoved(({ payload }) => {
+        void updateAnchor(payload.y);
         const nextPosition = { x: payload.x, y: payload.y };
         if (windowRectRef.current) {
           windowRectRef.current = { ...windowRectRef.current, ...nextPosition };
@@ -372,7 +400,9 @@ export default function MiniPlayer() {
           (expandedRef.current ? EXPANDED_CAPSULE_HEIGHT : COLLAPSED_HEIGHT) * scale;
         const capsuleWidth = capsuleWidthRef.current * scale;
         const capsuleCenterX = rect.x + rect.width / 2;
-        const capsuleBottom = rect.y + rect.height - WINDOW_PADDING * scale;
+        const capsuleBottom = anchorTopRef.current
+          ? rect.y + WINDOW_PADDING * scale + capsuleHeight
+          : rect.y + rect.height - WINDOW_PADDING * scale;
 
         // Once open, the region the cursor must leave is deliberately bigger than the one
         // it had to enter. See HOVER_RELEASE_SLACK.
@@ -782,6 +812,19 @@ export default function MiniPlayer() {
       ? (displayedTime / timeState.duration) * 100
       : 0;
 
+  /*
+   * The wheel always controls volume, whatever the hover bar is set to, so the volume can be
+   * changed without giving up the song position slider. Same feel as the other skins: the
+   * step is proportional, so a trackpad fine-tunes and a wheel notch moves about 5%.
+   */
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const delta = Math.max(-0.1, Math.min(0.1, -event.deltaY / 2000));
+    const next = Math.round(Math.min(1, Math.max(0, displayedVolume + delta)) * 100) / 100;
+    setVolumePreview(next);
+    void emit("mini-player:volume", { volume: next });
+    keepVolumePreviewUntilSync();
+  };
+
   // Playback progress is drawn as a ring around the artwork, so the collapsed pill
   // communicates position without spending any of its 100px budget on a progress bar.
   const trackProgress = timeState.duration > 0
@@ -791,8 +834,11 @@ export default function MiniPlayer() {
   return (
     <div
       ref={wrapperRef}
-      className="flex h-full w-full items-end justify-center bg-transparent"
-      style={{ paddingBottom: WINDOW_PADDING }}
+      className={cn(
+        "flex h-full w-full justify-center bg-transparent",
+        anchorTop ? "items-start" : "items-end",
+      )}
+      style={anchorTop ? { paddingTop: WINDOW_PADDING } : { paddingBottom: WINDOW_PADDING }}
       onBlur={handleMacFocusOut}
     >
       {/*
@@ -823,6 +869,7 @@ export default function MiniPlayer() {
           if (event.button === RIGHT_MOUSE_BUTTON) void stopManualWindowDrag();
         }}
         onContextMenu={(event) => event.preventDefault()}
+        onWheel={handleWheel}
       >
         {/*
           Album-reactive backdrop: the artwork itself, blown up and blurred past recognition,
@@ -928,7 +975,13 @@ export default function MiniPlayer() {
                 </Marquee>
               )}
             </div>
-            {playerState.artist ? (
+            {/* The artist line briefly shows the level while it changes, so a wheel turn
+                has feedback even when the hover bar is the song position. */}
+            {volumePreview !== null ? (
+              <p className="truncate text-[10px] leading-tight text-white/55 tabular-nums">
+                Volume {Math.round(volumePreview * 100)}%
+              </p>
+            ) : playerState.artist ? (
               <p className="truncate text-[10px] leading-tight text-white/55">
                 {playerState.artist}
               </p>
@@ -944,8 +997,14 @@ export default function MiniPlayer() {
             type="button"
             onMouseDown={(event) => event.stopPropagation()}
             onClick={() => void handleClose()}
+            // Right-click on the capsule drags it, so the close options live on this button.
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void showMiniPlayerCloseMenu();
+            }}
             aria-label="Close mini player"
-            title="Close"
+            title="Close (right-click for more)"
           >
             <CloseIcon size={13} aria-hidden="true" />
           </button>

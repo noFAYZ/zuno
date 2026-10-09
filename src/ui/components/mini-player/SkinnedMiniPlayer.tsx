@@ -8,7 +8,7 @@ import {
 } from "../../settings/miniPlayer";
 import { useReduceMotion } from "../../settings/renderEffects";
 import { isLinux } from "../../platform";
-import { restoreMainWindow, useMiniPlayerBridge } from "./useMiniPlayerBridge";
+import { restoreMainWindow, showMiniPlayerCloseMenu, useMiniPlayerBridge } from "./useMiniPlayerBridge";
 import { SKIN_COMPONENTS } from "./skins";
 
 const win = getCurrentWindow();
@@ -111,7 +111,10 @@ export function SkinnedMiniPlayer({ skin }: { skin: Exclude<MiniPlayerSkinId, "c
       className="grid h-full w-full cursor-grab place-items-center bg-transparent active:cursor-grabbing"
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
-      onContextMenu={(event) => event.preventDefault()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        void showMiniPlayerCloseMenu();
+      }}
     >
       <Skin
         title={playerState.title}
