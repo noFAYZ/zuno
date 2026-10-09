@@ -1758,15 +1758,6 @@ export function SettingsPage({
 
             {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
 
-
-            <SettingToggle
-              title="Minimize to tray"
-              description="Closing the window hides Zuno to the system tray and keeps playing. When off, no tray icon is shown."
-              checked={minimizeToTray}
-              onCheckedChange={setMinimizeToTray}
-            />
-
-
             <SettingToggle
               title="Remember window size and location"
               description="Reopen the main window with its last size and screen position."
@@ -2013,6 +2004,14 @@ export function SettingsPage({
                 </div>
               )}
             </SettingRow>
+
+            {/* Next to the window buttons, because it decides what the close button does. */}
+            <SettingToggle
+              title="Minimize to tray"
+              description="Closing the window hides Zuno to the system tray and keeps playing. When off, no tray icon is shown."
+              checked={minimizeToTray}
+              onCheckedChange={setMinimizeToTray}
+            />
 
             {/* Only reachable when it does something: hidden once native chrome takes over,
                 and off tiling compositors the buttons already show without this. */}
