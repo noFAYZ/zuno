@@ -38,6 +38,7 @@ const ENTRIES: SettingsSearchEntry[] = [
   { tab: "window", category: "Window", title: "Window controls", description: "Choose macOS, Windows, or native title-bar buttons." },
   { tab: "window", category: "Window", title: "Compact player bar", description: "Use a smaller playback bar." },
   { tab: "window", category: "Window", title: "System media controls", description: "Show playback in system media controls." },
+  { tab: "window", category: "Window", title: "Window outline", description: "Show or hide the thin edge around the window." },
   { tab: "shortcuts", category: "Shortcuts", title: "Keyboard shortcuts", description: "View, record, or clear keyboard bindings." },
 ];
 

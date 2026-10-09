@@ -127,9 +127,11 @@ import {
 import {
   setForceWindowControls,
   setNativeWindowControls,
+  setWindowOutline,
   setWindowsStyleWindowControls,
   useForceWindowControls,
   useNativeWindowControls,
+  useWindowOutline,
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
 import {
@@ -647,6 +649,7 @@ export function SettingsPage({
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const nativeWindowControls = useNativeWindowControls();
   const forceWindowControls = useForceWindowControls();
+  const windowOutline = useWindowOutline();
   const tilingWindowManager = useSyncExternalStore(
     subscribeTilingWindowManager,
     isTilingWindowManager,
@@ -2019,6 +2022,16 @@ export function SettingsPage({
                 description="Tiling compositors don't draw window buttons for apps, so they're hidden by default. Turn this on to show them anyway."
                 checked={forceWindowControls}
                 onCheckedChange={setForceWindowControls}
+              />
+            )}
+
+            {/* The OS frame replaces the outline, so the switch would do nothing there. */}
+            {windowControlStyle !== "native" && (
+              <SettingToggle
+                title="Window outline"
+                description="Draw a thin edge around the window so it stands apart from what's behind it."
+                checked={windowOutline}
+                onCheckedChange={setWindowOutline}
               />
             )}
 

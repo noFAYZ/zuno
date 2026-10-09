@@ -46,7 +46,7 @@ import { TitleBar } from "./components/TitleBar";
 import { PlayerBar } from "./components/player/PlayerBar";
 import { QueuePanel } from "./components/player/QueuePanel";
 import { useQueuePanelCollapsed } from "./settings/queuePanel";
-import { useNativeWindowControls } from "./settings/windowControls";
+import { useNativeWindowControls, useWindowOutline } from "./settings/windowControls";
 
 /** Wide enough for a 44px cover plus breathing room, matching the sidebar rail's feel. */
 const COLLAPSED_QUEUE_WIDTH = 62;
@@ -377,6 +377,7 @@ export default function App() {
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const isQueuePanelCollapsed = useQueuePanelCollapsed();
   const nativeWindowControls = useNativeWindowControls();
+  const windowOutline = useWindowOutline();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
@@ -1987,10 +1988,14 @@ useEffect(() => {
 
       Both drop out under OS native decorations: the WM already draws a real frame above the
       webview there, so this edge would just be a stray line under the OS title bar.
+      The "Window outline" setting can also turn it off for desktops where it reads as a
+      white border rather than an edge.
     */}
     <div
       className={`relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ${
-        nativeWindowControls ? "" : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
+        nativeWindowControls || !windowOutline
+          ? ""
+          : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
       }`}
     >
  {/*    {!paperPcMode && <StarField />}
