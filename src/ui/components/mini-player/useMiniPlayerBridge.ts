@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
+import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { setMiniPlayerEnabled } from "../../settings/miniPlayer";
 
 export interface PlayerSync {
   status: string;
@@ -77,4 +79,21 @@ export async function restoreMainWindow(): Promise<void> {
     await mainWin.unminimize();
     await mainWin.setFocus();
   }
+}
+
+/**
+ * Closing the mini player only hides it until the main window is next backgrounded, which
+ * is right for "not now" but leaves no quick way to say "never". This menu offers both.
+ *
+ * "Don't show again" only flips the setting: the main window hears the localStorage change
+ * and destroys this window itself, exactly as when the switch is turned off in Settings.
+ */
+export async function showMiniPlayerCloseMenu(): Promise<void> {
+  const menu = await Menu.new({
+    items: [
+      { text: "Hide for now", action: () => void getCurrentWindow().destroy() },
+      { text: "Don't show again", action: () => setMiniPlayerEnabled(false) },
+    ],
+  });
+  await menu.popup();
 }

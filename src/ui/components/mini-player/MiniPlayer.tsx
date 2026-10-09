@@ -26,7 +26,7 @@ import { saveMiniPlayerPosition, useMiniPlayerHoverAction } from "../../settings
 import { isLinux, isMacOS, isWindows } from "../../platform";
 import { Marquee } from "@/components/motion/marquee";
 import { TrackArtwork } from "../TrackArtwork";
-import { restoreMainWindow, useMiniPlayerBridge } from "./useMiniPlayerBridge";
+import { restoreMainWindow, showMiniPlayerCloseMenu, useMiniPlayerBridge } from "./useMiniPlayerBridge";
 
 const win = getCurrentWindow();
 
@@ -965,8 +965,14 @@ export default function MiniPlayer() {
             type="button"
             onMouseDown={(event) => event.stopPropagation()}
             onClick={() => void handleClose()}
+            // Right-click on the capsule drags it, so the close options live on this button.
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void showMiniPlayerCloseMenu();
+            }}
             aria-label="Close mini player"
-            title="Close"
+            title="Close (right-click for more)"
           >
             <CloseIcon size={13} aria-hidden="true" />
           </button>
