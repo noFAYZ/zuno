@@ -133,6 +133,10 @@ const YOUTUBE_COOKIE_ENCRYPTION_KEY_USER: &str = "youtube-music-cookie-encryptio
 #[cfg(target_os = "macos")]
 const YOUTUBE_COOKIE_ENCRYPTED_FILE: &str = "youtube-music-session-v1.bin";
 const YOUTUBE_LOGIN_WINDOW: &str = "youtube-music-login";
+/// The sign-in window holds two webviews: a read-only address bar on top and Google below.
+const YOUTUBE_LOGIN_ADDRESS_BAR: &str = "youtube-music-login-address";
+const YOUTUBE_LOGIN_PAGE: &str = "youtube-music-login-page";
+const YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT: f64 = 36.0;
 const YOUTUBE_LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
 /// Storage partition for the sign-in webview, so clearing it cannot touch the app's own.
 ///
@@ -2333,6 +2337,11 @@ fn decode_slot_id_bytes(slot_id: &str) -> [u8; 16] {
 /// clean login/account-chooser screen, and a silent refresh against a specific slot's partition
 /// can only ever renew *that* account's session, never a different stored one.
 ///
+/// The window also shows a read-only address bar above the page, as a browser would, so users
+/// can check that they are typing their password into accounts.google.com and not a lookalike.
+/// It is a separate webview with no IPC access, and only this function writes to it, so the
+/// page being shown cannot fake it.
+///
 /// `loaded` is raised once a navigation finishes, which the silent refresh needs: cookies read
 /// before the page has actually loaded are the same stale ones we already hold.
 fn build_login_window(
@@ -2340,24 +2349,47 @@ fn build_login_window(
     visible: bool,
     loaded: Arc<AtomicBool>,
     slot_id: &str,
-) -> Result<tauri::WebviewWindow, CommandError> {
-    if let Some(existing) = app.get_webview_window(YOUTUBE_LOGIN_WINDOW) {
+) -> Result<tauri::Webview, CommandError> {
+    if let Some(existing) = app.get_window(YOUTUBE_LOGIN_WINDOW) {
         let _ = existing.close();
     }
+
+    let build_error = |error: tauri::Error| CommandError {
+        message: format!("unable to open YouTube Music sign-in: {error}"),
+    };
+    let (width, height) = (520.0, 760.0);
+    let window = tauri::window::WindowBuilder::new(app, YOUTUBE_LOGIN_WINDOW)
+        .title("Sign in to YouTube Music")
+        .visible(visible)
+        .skip_taskbar(!visible)
+        .inner_size(width, height)
+        .build()
+        .map_err(build_error)?;
+
+    window
+        .add_child(
+            tauri::webview::WebviewBuilder::new(
+                YOUTUBE_LOGIN_ADDRESS_BAR,
+                tauri::WebviewUrl::App("login-bar.html".into()),
+            ),
+            tauri::LogicalPosition::new(0.0, 0.0),
+            tauri::LogicalSize::new(width, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+        )
+        .map_err(build_error)?;
 
     let blank_url = "about:blank".parse().map_err(|error| CommandError {
         message: format!("invalid blank login URL: {error}"),
     })?;
-    let window_builder = tauri::WebviewWindowBuilder::new(
-        app,
-        YOUTUBE_LOGIN_WINDOW,
+    let page_builder = tauri::webview::WebviewBuilder::new(
+        YOUTUBE_LOGIN_PAGE,
         tauri::WebviewUrl::External(blank_url),
     )
-    .title("Sign in to YouTube Music")
-    .visible(visible)
-    .skip_taskbar(!visible)
-    .inner_size(520.0, 760.0)
-    .on_page_load(move |_window, payload| {
+    .on_page_load(move |page, payload| {
+        // Both events, so the bar already shows the new address while a slow page loads.
+        if let Some(address_bar) = page.get_webview(YOUTUBE_LOGIN_ADDRESS_BAR) {
+            let url = serde_json::Value::from(payload.url().as_str());
+            let _ = address_bar.eval(format!("window.showUrl?.({url})"));
+        }
         if payload.event() == tauri::webview::PageLoadEvent::Finished {
             loaded.store(true, Ordering::Relaxed);
         }
@@ -2365,7 +2397,7 @@ fn build_login_window(
     // See YOUTUBE_LOGIN_DATA_DIR: without its own partition, clearing this window's data
     // clears the main window's storage too.
     #[cfg(not(target_os = "macos"))]
-    let window_builder = window_builder.data_directory(
+    let page_builder = page_builder.data_directory(
         app.path()
             .app_local_data_dir()
             .map_err(|error| CommandError {
@@ -2374,14 +2406,57 @@ fn build_login_window(
             .join(login_partition_directory_name(slot_id)),
     );
     #[cfg(target_os = "macos")]
-    let window_builder = window_builder
+    let page_builder = page_builder
         .user_agent(MACOS_LOGIN_USER_AGENT)
         // macOS 14+ only; older versions fall back to the shared store, as they did before.
         .data_store_identifier(login_partition_store_id(slot_id));
 
-    window_builder.build().map_err(|error| CommandError {
-        message: format!("unable to open YouTube Music sign-in: {error}"),
-    })
+    let page = window
+        .add_child(
+            page_builder,
+            tauri::LogicalPosition::new(0.0, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+            tauri::LogicalSize::new(width, height - YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+        )
+        .map_err(build_error)?;
+
+    // On Linux the child webviews are packed into the window's GTK box, which ignores their
+    // bounds and gives each the same share of the height. Pin the bar to its own height there
+    // and let the page take the rest; GTK keeps that layout through resizes by itself.
+    #[cfg(target_os = "linux")]
+    {
+        let gtk_window = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            use gtk::prelude::*;
+            let Ok(vbox) = gtk_window.default_vbox() else { return };
+            if let Some(bar) = vbox.children().first() {
+                bar.set_size_request(-1, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT as i32);
+                bar.set_vexpand(false);
+                vbox.set_child_packing(bar, false, true, 0, gtk::PackType::Start);
+            }
+        });
+    }
+
+    // Elsewhere child webviews keep their bounds when the window is resized, so lay them out
+    // again: the bar keeps its height and the page takes the rest.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let content = page.clone();
+        window.on_window_event(move |event| {
+            let tauri::WindowEvent::Resized(size) = event else { return };
+            let Some(bar) = content.get_webview(YOUTUBE_LOGIN_ADDRESS_BAR) else { return };
+            let bar_height = (YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT * bar.window().scale_factor().unwrap_or(1.0)) as u32;
+            let _ = bar.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, 0).into(),
+                size: tauri::PhysicalSize::new(size.width, bar_height).into(),
+            });
+            let _ = content.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, bar_height).into(),
+                size: tauri::PhysicalSize::new(size.width, size.height.saturating_sub(bar_height)).into(),
+            });
+        });
+    }
+
+    Ok(page)
 }
 
 /// Clears a stored account's own webview partition, e.g. when it is removed or when an
@@ -2397,19 +2472,19 @@ fn remove_login_partition(app: &tauri::AppHandle, slot_id: &str) {
     if slot_id == LEGACY_ACCOUNT_SLOT_ID {
         return;
     }
-    let Ok(window) = build_login_window(app, false, Arc::new(AtomicBool::new(false)), slot_id) else {
+    let Ok(page) = build_login_window(app, false, Arc::new(AtomicBool::new(false)), slot_id) else {
         return;
     };
-    let _ = window.clear_all_browsing_data();
+    let _ = page.clear_all_browsing_data();
     // The clear is asynchronous underneath and reports through a handler nobody waits on;
     // closing the webview out from under it can leave the partition half-cleared.
     thread::sleep(Duration::from_millis(750));
-    let _ = window.close();
+    let _ = page.window().close();
 }
 
 /// The session cookie as the login webview currently holds it, if it holds one at all.
 fn harvest_session_cookie(
-    window: &tauri::WebviewWindow,
+    window: &tauri::Webview,
 ) -> Result<Option<String>, CommandError> {
     #[cfg(target_os = "macos")]
     let cookies = window
@@ -2498,7 +2573,7 @@ async fn sign_in_youtube_music(
     let result = poll_for_sign_in(&app, &jar, &account_lock, &window, &candidate_slot_id);
     // Any failure (cancel, timeout, keyring error) must not leave the window up or the partition behind (#144).
     if result.is_err() {
-        let _ = window.close();
+        let _ = window.window().close();
         remove_login_partition(&app, &candidate_slot_id);
     }
     result
@@ -2508,7 +2583,7 @@ fn poll_for_sign_in(
     app: &tauri::AppHandle,
     jar: &YoutubeCookieJar,
     account_lock: &AccountStoreLock,
-    window: &tauri::WebviewWindow,
+    window: &tauri::Webview,
     candidate_slot_id: &str,
 ) -> Result<SignInResult, CommandError> {
     let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
@@ -2522,7 +2597,7 @@ fn poll_for_sign_in(
     for poll in 1..=300 {
         let harvested = match harvest_session_cookie(window) {
             // Closing the window mid-read fails the read on macOS; that is still a cancel (#143).
-            Err(_) if app.get_webview_window(YOUTUBE_LOGIN_WINDOW).is_none() => None,
+            Err(_) if app.get_window(YOUTUBE_LOGIN_WINDOW).is_none() => None,
             other => other?,
         };
         if let Some(cookie_header) = harvested {
@@ -2551,7 +2626,7 @@ fn poll_for_sign_in(
                 account_changed,
                 slot_id,
             );
-            let _ = window.close();
+            let _ = window.window().close();
             return Ok(SignInResult {
                 cookie: cookie_header,
                 account_changed,
@@ -2559,7 +2634,7 @@ fn poll_for_sign_in(
             });
         }
 
-        if app.get_webview_window(YOUTUBE_LOGIN_WINDOW).is_none() {
+        if app.get_window(YOUTUBE_LOGIN_WINDOW).is_none() {
             eprintln!(
                 "[internal][tauri][warn] sign_in_youtube_music cancelled poll={}",
                 poll
@@ -2642,7 +2717,7 @@ async fn refresh_youtube_music_cookie(
         eprintln!("[internal][tauri][info] refresh_youtube_music_cookie found no usable session");
         Ok(None)
     })();
-    let _ = window.close();
+    let _ = window.window().close();
     result
 }
 

@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+# `unstable` is what allows more than one webview in a window: the sign-in window puts a
+# read-only address bar above Google's page.
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png", "unstable"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-localhost = "2"
@@ -79,4 +81,6 @@ windows = { version = "0.61.3", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 souvlaki = "0.7"
+# Already in the tree via tauri; used to size the sign-in window's address bar in GTK's box.
+gtk = "0.18"
 
