@@ -31,7 +31,7 @@ import {
   hydrateMainWindowGeometry,
   restoreMainWindowGeometry,
 } from "./ui/settings/mainWindowGeometry";
-import { applyPlatformAttributes, detectTilingWindowManager } from "./ui/platform";
+import { applyPlatformAttributes, detectTilingWindowManager, isAndroid } from "./ui/platform";
 import { hydrateArtworkCache } from "./internal/artworkCache";
 import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
@@ -48,7 +48,7 @@ logInternalInfo("main.bootstrap start");
 // let its image flash the fallback icon.
 hydrateArtworkCache();
 applyPlatformAttributes();
-void detectTilingWindowManager();
+if (!isAndroid) void detectTilingWindowManager();
 // Before React mounts: a late theme apply shows a flash of the wrong palette.
 applyTheme();
 watchSystemTheme();
@@ -57,10 +57,12 @@ applyRenderEffects();
 // One line a minute in the app log, so "the renderer is using 220 MB" can be split into heap,
 // DOM, images and subframes instead of guessed at. Settings → Troubleshooting → Open log.
 startMemoryReport();
-void applyNativeWindowControls();
-void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) => {
-  logInternalError("mainWindowGeometry.restore failed", error);
-});
+if (!isAndroid) void applyNativeWindowControls();
+if (!isAndroid) {
+  void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) => {
+    logInternalError("mainWindowGeometry.restore failed", error);
+  });
+}
 void Promise.all([
   hydratePaperPcMode(),
   hydrateRenderEffects(),
@@ -70,14 +72,14 @@ void Promise.all([
   hydrateMiniPlayerSettings(),
   hydratePlayerControlSettings(),
   hydrateQueuePanelSettings(),
-  hydrateTraySettings(),
+  isAndroid ? Promise.resolve() : hydrateTraySettings(),
   hydrateAudioQualitySettings(),
   hydrateAudioEngineMode(),
   // Rust starts flat every launch, so the stored curve has to be pushed back down.
-  hydrateEqualizer(),
+  isAndroid ? Promise.resolve() : hydrateEqualizer(),
   hydrateHiddenPlaylists(),
   // Same reason: a fresh Rust process opens the OS default device until told otherwise.
-  hydrateOutputDevice(),
+  isAndroid ? Promise.resolve() : hydrateOutputDevice(),
   hydrateYouTubeAccountSettings(),
   hydrateLastFmSettings(),
   hydrateDiscordSettings(),
@@ -98,9 +100,11 @@ void Promise.all([
 // Initialize Discord RPC (non-blocking)
 logInternalInfo("[Discord RPC] Initializing Discord RPC service");
 try {
-  void DiscordRpcService.init().catch((error) => {
-    logInternalError("[Discord RPC] initialization error", error);
-  });
+  if (!isAndroid) {
+    void DiscordRpcService.init().catch((error) => {
+      logInternalError("[Discord RPC] initialization error", error);
+    });
+  }
 } catch (error) {
   logInternalError("[Discord RPC] failed to initialize", error);
 }
@@ -135,6 +139,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
  * a rescan is cheap and precisely diffing renames, temp files and write-then-replace editors
  * would be far more code for the same visible result.
  */
-syncLocalAudioWatcher();
-void listen("local-audio-changed", () => notifyLocalPlaylistsChanged());
+if (!isAndroid) {
+  syncLocalAudioWatcher();
+  void listen("local-audio-changed", () => notifyLocalPlaylistsChanged());
+}
 

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isAndroid } from "../platform";
 import { logInternalError } from "../../internal/logging";
 import {
   hydrateLocalBooleanSetting,
@@ -66,6 +67,7 @@ export function setForceWindowControls(enabled: boolean) {
 }
 
 export async function applyNativeWindowControls(enabled = readNativeWindowControls()) {
+  if (isAndroid) return;
   try {
     await getCurrentWindow().setDecorations(enabled);
     document.documentElement.toggleAttribute("data-native-window-controls", enabled);

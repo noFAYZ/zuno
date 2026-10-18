@@ -1,0 +1,104 @@
+# Builds an installable Android APK. Run it from the Actions tab ("Run workflow"), then download
+# the `zuno-android-apk` artifact from the finished run.
+#
+# The Android project (src-tauri/gen/android) is generated here with `tauri android init` rather
+# than checked in, so there is no generated Gradle tree to keep in sync with the Tauri version.
+#
+# Signing: an unsigned APK cannot be installed. With the ANDROID_KEYSTORE_BASE64,
+# ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS secrets set, the APK is signed with that key
+# (use the same key every time, or phones will refuse to update over an older install). Without
+# them a throwaway key is generated, which is fine for trying the app out.
+name: Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Generate the Android project
+        run: npx tauri android init --ci
+
+      - name: Add permissions
+        run: |
+          manifest=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          for permission in INTERNET WAKE_LOCK; do
+            grep -q "android.permission.${permission}\"" "$manifest" || \
+              sed -i "s#<application#<uses-permission android:name=\"android.permission.${permission}\" />\n    <application#" "$manifest"
+          done
+
+      - name: Build
+        # The updater artifacts need a signing key and the updater plugin is desktop-only.
+        run: >
+          npx tauri android build --apk --target aarch64
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Sign
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          unsigned=$(find src-tauri/gen/android -name '*-unsigned.apk' | head -n1)
+          test -n "$unsigned" || { echo "no unsigned APK found"; exit 1; }
+
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          else
+            KEYSTORE_PASSWORD=zuno-throwaway
+            KEY_ALIAS=zuno
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -alias "$KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 -storepass "$KEYSTORE_PASSWORD" \
+              -dname "CN=Zuno" >/dev/null 2>&1
+          fi
+
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          "$tools/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          mkdir -p out
+          "$tools/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --out out/zuno-android.apk "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify out/zuno-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zuno-android-apk
+          path: out/zuno-android.apk
+          if-no-files-found: error

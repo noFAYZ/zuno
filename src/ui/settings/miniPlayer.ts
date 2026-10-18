@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { isAndroid } from "../platform";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   availableMonitors,
@@ -297,6 +298,8 @@ async function createMiniPlayerWindow(): Promise<WebviewWindow | null> {
  * the same tick, and creating the label twice is an error rather than a second window.
  */
 export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
+  // Android has a single webview window; there is nothing to create.
+  if (isAndroid) return Promise.resolve(null);
   if (miniPlayerCreation) return miniPlayerCreation;
 
   const creation = queueMiniPlayerOp(createMiniPlayerWindow);
@@ -313,6 +316,7 @@ export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
 
 /** Frees the window's process. `hide()` keeps it resident; only destroying returns the memory. */
 export function destroyMiniPlayerWindow(): Promise<void> {
+  if (isAndroid) return Promise.resolve();
   return queueMiniPlayerOp(async () => {
     setMiniPlayerWindowLive(false);
     const miniWin = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
@@ -326,6 +330,7 @@ export function destroyMiniPlayerWindow(): Promise<void> {
 }
 
 export async function resetMiniPlayerPosition() {
+  if (isAndroid) return;
   const miniWin = await WebviewWindow.getByLabel("mini-player");
   const monitor = await currentMonitor()
     ?? await primaryMonitor()

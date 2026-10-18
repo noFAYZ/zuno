@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { logInternalError } from "./logging";
+import { isAndroid } from "../ui/platform";
 
 const RELEASE_TAG_PREFIX = "v";
 const RELEASES_URL =
@@ -70,6 +71,9 @@ async function checkViaGithubApi(): Promise<UpdateInfo | null> {
 }
 
 export async function checkForUpdates(): Promise<UpdateInfo | null> {
+  // The updater and process plugins do not exist on Android; APK updates are out of scope.
+  if (isAndroid) return null;
+
   const isMacOS =
     typeof navigator !== "undefined" && /Macintosh|Mac OS X/.test(navigator.userAgent);
 
@@ -100,7 +104,7 @@ export async function installUpdate(
   info: UpdateInfo,
   onProgress?: (progress: UpdateInstallProgress) => void,
 ): Promise<void> {
-  if (!info.update) {
+  if (isAndroid || !info.update) {
     throw new Error(
       "This update cannot be installed automatically. Please download it from the release page.",
     );

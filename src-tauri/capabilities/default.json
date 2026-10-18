@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main","mini-player"],
+  "windows": [
+    "main",
+    "mini-player"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -14,12 +17,7 @@
     "core:window:allow-unmaximize",
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-decorations",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled",
     "opener:default",
-    "updater:default",
-    "process:allow-restart",
     "dialog:allow-open",
     "dialog:allow-message",
     "core:window:allow-hide",

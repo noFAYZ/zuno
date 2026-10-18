@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { isAndroid } from "../platform";
 import {
   hydrateLocalBooleanSetting,
   hydrateLocalJsonSetting,
@@ -138,6 +139,8 @@ export function setEqualizerEnabled(enabled: boolean): void {
 /// Rust has no notion of "off": it only ever sees a curve, flat or not. The switch lives here,
 /// entirely on the frontend, by choosing what to push rather than sending the switch itself.
 function push(settings: EqualizerSettings): void {
+  // The EQ lives in the Rust decoder, which does not exist on Android.
+  if (isAndroid) return;
   const applied = isEqualizerEnabled() ? settings : EQUALIZER_FLAT;
   void invoke("native_audio_set_equalizer", {
     preampDb: applied.preampDb,

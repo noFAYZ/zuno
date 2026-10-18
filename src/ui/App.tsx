@@ -92,7 +92,7 @@ import {
   previousOnboardingStep,
   type OnboardingStep,
 } from "./components/Onboarding";
-import { isLinux, isMacOS } from "./platform";
+import { isAndroid, isLinux, isMacOS } from "./platform";
 import { useReduceMotion } from "./settings/renderEffects";
 
 import { emit, listen } from "@tauri-apps/api/event";
@@ -316,6 +316,7 @@ export default function App() {
   // The window is transparent so the app root can round its own corners. When the window
   // is maximised or fullscreen those corners would expose the desktop, so drop the radius.
   useEffect(() => {
+    if (isAndroid) return;
     const appWindow = getCurrentWindow();
     let disposed = false;
 
@@ -349,6 +350,7 @@ export default function App() {
   // Full-screen lyrics is real OS fullscreen, not just a wider layout — the whole point is
   // the window chrome getting out of the way too.
   useEffect(() => {
+    if (isAndroid) return;
     void getCurrentWindow()
       .setFullscreen(playerUIState.isLyricsFullscreen)
       .catch((error) => {
@@ -1743,6 +1745,8 @@ useEffect(() => {
 
 
 useEffect(() => {
+  // Single-window platform: nothing backgrounds into a mini player.
+  if (isAndroid) return;
   const setupListeners = async () => {
     /** Destroys rather than hides: a hidden webview keeps its whole renderer process alive. */
     const dismissMiniPlayer = () => destroyMiniPlayerWindow();

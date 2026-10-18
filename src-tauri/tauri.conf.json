@@ -37,8 +37,15 @@
         "bundleMediaFramework": true
       },
       "rpm": {
-        "depends": ["webkit2gtk4.1", "gtk3", "libayatana-appindicator-gtk3"],
-        "recommends": ["gstreamer1-plugins-good", "gstreamer1-plugin-libav"]
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "libayatana-appindicator-gtk3"
+        ],
+        "recommends": [
+          "gstreamer1-plugins-good",
+          "gstreamer1-plugin-libav"
+        ]
       }
     },
     "icon": [
@@ -47,7 +54,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "android": {
+      "minSdkVersion": 26
+    }
   },
   "plugins": {
     "updater": {

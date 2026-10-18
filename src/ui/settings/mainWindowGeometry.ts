@@ -15,6 +15,7 @@ import {
 } from "../../internal/durableLocalSetting";
 import { removeAppSetting } from "../../internal/appSettings";
 import { logInternalError } from "../../internal/logging";
+import { isAndroid } from "../platform";
 
 const STORAGE_KEY = "main-window-geometry";
 const GEOMETRY_ENABLED_STORAGE_KEY = "main-window-geometry-persistence-enabled";
@@ -91,6 +92,7 @@ async function isGeometryOnAnyMonitor(geometry: MainWindowGeometry): Promise<boo
 }
 
 async function saveCurrentMainWindowGeometry(): Promise<void> {
+  if (isAndroid) return;
   const win = getCurrentWindow();
   const [position, size, isMaximized, isFullscreen] = await Promise.all([
     win.outerPosition(),
@@ -140,6 +142,7 @@ export async function hydrateMainWindowGeometry(): Promise<void> {
 }
 
 export async function restoreMainWindowGeometry(): Promise<void> {
+  if (isAndroid) return;
   if (!readMainWindowGeometryPersistenceEnabled()) return;
 
   const geometry = readLocalJsonSetting(STORAGE_KEY, isMainWindowGeometry);
@@ -151,6 +154,7 @@ export async function restoreMainWindowGeometry(): Promise<void> {
 }
 
 export async function persistMainWindowGeometry(): Promise<() => void> {
+  if (isAndroid) return () => {};
   const win = getCurrentWindow();
   let saveTimer: number | null = null;
 

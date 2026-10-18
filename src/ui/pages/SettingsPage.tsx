@@ -204,7 +204,12 @@ import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
 } from "../settings/lastfm";
-import { isLinux, isTilingWindowManager, subscribeTilingWindowManager } from "../platform";
+import {
+  isAndroid,
+  isLinux,
+  isTilingWindowManager,
+  subscribeTilingWindowManager,
+} from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
 import { AccountAvatar, AccountSwitcher, AddGoogleAccountButton, GoogleAccountSwitcher } from "../components/AccountSwitcher";
 import {
@@ -222,6 +227,12 @@ import {
   useOfflineState,
 } from "../../player/offlineStore";
 
+/** The process plugin does not exist on Android; callers fall back to a webview reload. */
+function relaunchApp(): Promise<void> {
+  return isAndroid ? Promise.reject(new Error("relaunch unavailable")) : relaunch();
+}
+
+
 
 
 
@@ -237,7 +248,10 @@ const SETTING_LABEL =
   "flex flex-col gap-0.5 text-sm text-muted-foreground [&>strong]:text-sm [&>strong]:font-medium [&>strong]:text-foreground";
 
 /** Section card. One shape for every group so the page reads as a single system. */
-const SETTINGS_CARD = "flex flex-col gap-5 rounded-2xl bg-card/50 p-6";
+const SETTINGS_CARD = "flex flex-col gap-5 rounded-2xl bg-card/50 p-6 [[data-mobile]_&]:p-4";
+
+/** A card that only means something on a desktop window (tray, mini player, Rust EQ, ...). */
+const DESKTOP_ONLY_CARD = cn(SETTINGS_CARD, "[[data-mobile]_&]:hidden");
 
 /**
  * How long ago YouTube last answered as this account, in words.
@@ -268,7 +282,7 @@ function EqualizerSettings({ engineMode }: { engineMode: AudioEngineMode }) {
   const available = engineMode === "rust";
 
   return (
-    <section className={SETTINGS_CARD} aria-labelledby="equalizer-settings-title">
+    <section className={DESKTOP_ONLY_CARD} aria-labelledby="equalizer-settings-title">
       <SettingsCardHeader
         title="Equaliser"
         titleId="equalizer-settings-title"
@@ -663,7 +677,7 @@ export function SettingsPage({
     if (goingNative !== nativeWindowControls) {
       setNativeWindowControls(goingNative);
       // GTK decorations don't reliably flip live on Linux, so this style needs a fresh window.
-      if (isLinux) void relaunch().catch(() => window.location.reload());
+      if (isLinux) void relaunchApp().catch(() => window.location.reload());
     }
     if (!goingNative) setWindowsStyleWindowControls(style === "windows");
   };
@@ -864,7 +878,7 @@ export function SettingsPage({
     setResetSettingsBusy(true);
     try {
       await onDeleteAllAppData();
-      await relaunch().catch(() => {
+      await relaunchApp().catch(() => {
         window.location.reload();
       });
     } catch {
@@ -1250,7 +1264,7 @@ export function SettingsPage({
             </div>
           </section>
 
-          <section className={SETTINGS_CARD} aria-labelledby="discord-settings-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="discord-settings-title">
             <h2 className="text-lg font-semibold text-foreground" id="discord-settings-title">
               Discord
             </h2>
@@ -1356,7 +1370,7 @@ export function SettingsPage({
 
       {activeTab === "system" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Library settings">
-          <section className={SETTINGS_CARD} aria-labelledby="library-local-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="library-local-title">
             <SettingsCardHeader
               title="Local music"
               titleId="library-local-title"
@@ -1737,7 +1751,7 @@ export function SettingsPage({
 
           </section>
 
-          <section className={SETTINGS_CARD} aria-labelledby="library-system-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="library-system-title">
             <SettingsCardHeader
               title="System"
               titleId="library-system-title"
@@ -1828,7 +1842,7 @@ export function SettingsPage({
 
       {activeTab === "shortcuts" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Keyboard shortcut settings">
-          <section className={SETTINGS_CARD} aria-labelledby="keyboard-shortcuts-settings-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="keyboard-shortcuts-settings-title">
             <h2
               className="text-lg font-semibold text-foreground"
               id="keyboard-shortcuts-settings-title"
@@ -1901,7 +1915,7 @@ export function SettingsPage({
 
       {activeTab === "window" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Style settings">
-          <section className={SETTINGS_CARD} aria-labelledby="window-settings-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="window-settings-title">
             <SettingsCardHeader
               title="Window controls"
               titleId="window-settings-title"
@@ -2032,7 +2046,7 @@ export function SettingsPage({
             )}
           </section>
 
-          <section className={SETTINGS_CARD} aria-labelledby="behavior-settings-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="behavior-settings-title">
             <div className="flex items-center gap-2">
               <h2 className="text-lg" id="behavior-settings-title">Behavior</h2>
             </div>
@@ -2096,7 +2110,7 @@ export function SettingsPage({
               Applies from the next track.
             </p>
 
-            <OutputDeviceSetting engineMode={audioEngineMode} />
+            {!isAndroid && <OutputDeviceSetting engineMode={audioEngineMode} />}
 
             <SettingToggle
               title="Resolve streams as your account"
@@ -2118,7 +2132,7 @@ export function SettingsPage({
             />
           </section>
 
-          <EqualizerSettings engineMode={audioEngineMode} />
+          {!isAndroid && <EqualizerSettings engineMode={audioEngineMode} />}
 
           <section className={SETTINGS_CARD} aria-labelledby="playback-settings-title">
             <SettingsCardHeader
@@ -2249,7 +2263,7 @@ export function SettingsPage({
             </div>
           </section>
 
-          <section className={SETTINGS_CARD} aria-labelledby="toolbar-settings-title">
+          <section className={DESKTOP_ONLY_CARD} aria-labelledby="toolbar-settings-title">
             <div className="min-w-0">
               <h2 className="text-lg" id="toolbar-settings-title">Title bar</h2>
               <p className="text-sm text-muted-foreground">

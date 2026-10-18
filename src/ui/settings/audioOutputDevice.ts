@@ -12,6 +12,7 @@ import {
   type OutputDevice,
 } from "../../player/rustAudio";
 import { usesRustAudioEngine } from "./audioEngine";
+import { isAndroid } from "../platform";
 
 export type { OutputDevice };
 export const listOutputDevices = invokeListOutputDevices;
@@ -48,6 +49,8 @@ function read(): string | null {
  * anyway.
  */
 async function push(id: string | null): Promise<void> {
+  // No Rust engine on Android, so there is no device to select.
+  if (isAndroid) return;
   const session = usesRustAudioEngine() ? playerController.getPlayerSession() : null;
   try {
     await pushOutputDevice(id);

@@ -18,12 +18,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
-tauri-plugin-autostart = "2"
+tauri = { version = "2", features = ["macos-private-api", "image-png"] }
 tauri-plugin-opener = "2"
-tauri-plugin-localhost = "2"
-tauri-plugin-single-instance = "2"
-portpicker = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "stream"] }
@@ -31,10 +27,6 @@ rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
 base64 = "0.22"
 url = "2.5"
-keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
-discord-rich-presence = "0.2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 md5 = "0.8.0"
 lofty = "0.24.0"
@@ -53,6 +45,19 @@ symphonia = { version = "0.5", default-features = false, features = ["mkv", "ogg
 opus = "0.3.1"
 # Was macOS-only (the session encryption key); account slot ids need it on every platform now.
 rand = "0.8"
+
+# Desktop-only: tray, autostart, single-instance, updater, localhost server, OS keychain and
+# Discord IPC have no Android equivalent (see src/keyring.rs for the Android credential store).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-localhost = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+portpicker = "0.1"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
+discord-rich-presence = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aes-gcm = "0.10"

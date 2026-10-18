@@ -1,6 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "android")))]
 use portpicker::pick_unused_port;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -22,9 +22,9 @@ macro_rules! eprintln {
     }};
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "android")))]
 use tauri::utils::config::FrontendDist;
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "android")))]
 use tauri::utils::config_v1::WindowUrl;
 
 use tauri::{Emitter, Manager};
@@ -47,7 +47,13 @@ mod linux_media;
 
 mod audio;
 mod process_memory;
+#[cfg(not(target_os = "android"))]
 mod discord_rpc;
+#[cfg(target_os = "android")]
+#[path = "discord_rpc_stub.rs"]
+mod discord_rpc;
+#[cfg(target_os = "android")]
+mod keyring;
 mod equalizer;
 mod opus_source;
 mod lastfm;
@@ -1672,12 +1678,22 @@ fn close_or_hide_main_window(app: &tauri::AppHandle) {
 }
 
 // The tray only exists to bring back a hidden window, so it follows minimize-to-tray (#145).
+#[cfg(target_os = "android")]
+fn set_tray_visible(_app: &tauri::AppHandle, _visible: bool) {}
+
+#[cfg(not(target_os = "android"))]
 fn set_tray_visible(app: &tauri::AppHandle, visible: bool) {
     if let Some(tray) = app.tray_by_id("main-tray") {
         let _ = tray.set_visible(visible);
     }
 }
 
+#[cfg(target_os = "android")]
+fn build_tray(_app: &tauri::AppHandle) -> tauri::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -5385,21 +5401,28 @@ pub fn run() {
          * it immediately. Reuses the tray's own "bring to front" — a second launch is exactly
          * that, wherever it came from.
          */
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            show_main_window(app);
-        }))
         .manage(CacheLock(Mutex::new(())))
         .manage(AppSettingsLock(Mutex::new(())))
         .manage(AccountStoreLock(Mutex::new(())))
         .manage(YoutubeCookieJar(Mutex::new(CookieJarState::default())))
         .manage(discord_manager)
-        .plugin(tauri_plugin_autostart::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(target_os = "android"))]
+    {
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+                show_main_window(app);
+            }))
+            .plugin(tauri_plugin_autostart::Builder::new().build())
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    // The packaged desktop build serves the UI from a localhost port (the YouTube IFrame needs a
+    // real http origin). Android's WebView already serves the bundle from http(s)://tauri.localhost.
+    #[cfg(all(not(debug_assertions), not(target_os = "android")))]
     {
         let port = pick_unused_port().expect("failed to find an unused localhost port");
         let url: url::Url = format!("http://localhost:{}", port)
@@ -5426,6 +5449,12 @@ pub fn run() {
              * them on the first command. A listener on the IFrame engine should never claim a
              * handle from the OS mixer for a decoder they will not use.
              */
+            #[cfg(target_os = "android")]
+            keyring::init(
+                app.path()
+                    .app_data_dir()
+                    .map_err(|error| format!("app data dir unavailable: {error}"))?,
+            );
             app.manage(audio::NativeAudio::new(app.handle().clone()));
             // Before the log is initialised, so a first run after the rename still logs to
             // the directory the user's settings were just restored into.

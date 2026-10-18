@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isAndroid } from "../ui/platform";
 import type { PlayerStatus } from "./PlayerController";
 import { createSerialQueue } from "../internal/asyncQueue";
 import { logInternalDebug, logInternalWarn } from "../internal/logging";
@@ -208,6 +209,8 @@ export class DiscordRpcService {
   }
 
   private static syncLatest(): Promise<void> {
+    // No Rich Presence on Android.
+    if (isAndroid) return Promise.resolve();
     return this.synchronizer.sync(this.lastPlayback, {
       enabled: getDiscordPresenceEnabled(),
       hideWhenPaused: getDiscordHideWhenPaused(),

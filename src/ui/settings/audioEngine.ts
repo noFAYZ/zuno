@@ -4,6 +4,7 @@ import {
   readLocalJsonSetting,
   writeLocalJsonSetting,
 } from "../../internal/durableLocalSetting";
+import { isAndroid } from "../platform";
 
 /**
  * Which pipeline actually makes sound.
@@ -35,9 +36,10 @@ const STORAGE_KEY = "audio-engine-mode";
 /** Exported so `AudioEngine` can free its decks the moment the mode stops being `iframe`. */
 export const AUDIO_ENGINE_MODE_CHANGE_EVENT = "audio-engine-mode-change";
 const CHANGE_EVENT = AUDIO_ENGINE_MODE_CHANGE_EVENT;
-const DEFAULT_MODE: AudioEngineMode = "rust";
+/** The Rust decoder engine is compiled out on Android, so the webview <audio> path is the default there. */
+const DEFAULT_MODE: AudioEngineMode = isAndroid ? "native" : "rust";
 
-export const AUDIO_ENGINE_MODES: ReadonlyArray<{
+const ALL_AUDIO_ENGINE_MODES: ReadonlyArray<{
   value: AudioEngineMode;
   label: string;
   hint: string;
@@ -59,6 +61,14 @@ export const AUDIO_ENGINE_MODES: ReadonlyArray<{
   },
 ];
 
+export const AUDIO_ENGINE_MODES: ReadonlyArray<{
+  value: AudioEngineMode;
+  label: string;
+  hint: string;
+}> = isAndroid
+  ? ALL_AUDIO_ENGINE_MODES.filter((entry) => entry.value !== "rust")
+  : ALL_AUDIO_ENGINE_MODES;
+
 function isAudioEngineMode(value: unknown): value is AudioEngineMode {
   return value === "iframe" || value === "native" || value === "rust";
 }
@@ -71,7 +81,8 @@ let cachedMode: AudioEngineMode | null = null;
 
 function readMode(): AudioEngineMode {
   if (cachedMode === null) {
-    cachedMode = readLocalJsonSetting(STORAGE_KEY, isAudioEngineMode) ?? DEFAULT_MODE;
+    const stored = readLocalJsonSetting(STORAGE_KEY, isAudioEngineMode) ?? DEFAULT_MODE;
+    cachedMode = isAndroid && stored === "rust" ? "native" : stored;
   }
   return cachedMode;
 }
