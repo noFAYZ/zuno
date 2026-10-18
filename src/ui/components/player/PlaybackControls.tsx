@@ -17,6 +17,8 @@ import { playerController } from "../../../player/playerStore";
 
 interface PlaybackControlsProps {
   extraControlsAlwaysVisible?: boolean;
+  /** Phone layout: just previous / play / next, no shuffle or repeat. */
+  compact?: boolean;
 }
 
 const CONTROL_BUTTON =
@@ -30,7 +32,7 @@ const GLYPH_MOTION = {
   transition: { type: "spring" as const, stiffness: 620, damping: 34 },
 };
 
-export function PlaybackControls({ extraControlsAlwaysVisible = true }: PlaybackControlsProps) {
+export function PlaybackControls({ extraControlsAlwaysVisible = true, compact = false }: PlaybackControlsProps) {
   const state = usePlayerSelector(
     (player) => ({
       currentTrack: player.currentTrack,
@@ -85,6 +87,7 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
       <div
         className={cn(
           "size-9 shrink-0 transition-opacity",
+          compact && "hidden",
           !extraControlsAlwaysVisible &&
             "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
         )}
@@ -150,6 +153,7 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
       <div
         className={cn(
           "size-9 shrink-0 transition-opacity",
+          compact && "hidden",
           !extraControlsAlwaysVisible &&
             "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
         )}

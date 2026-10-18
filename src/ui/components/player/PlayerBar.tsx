@@ -12,6 +12,7 @@ import { DownloadButton } from "./DownloadButton";
 import { PlaybackOptions } from "./PlaybackOptions";
 import { VolumeControl } from "./VolumeControl";
 import { LyricsButton } from "./LyricsButton";
+import { useCompactViewport } from "../../hooks/useCompactViewport";
 import {
   useCompactPlayerBar,
   useExtraPlayerControlsAlwaysVisible,
@@ -145,6 +146,7 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
 
   const extraControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
   const compactPlayerBar = useCompactPlayerBar();
+  const isPhone = useCompactViewport();
 
 
 
@@ -179,6 +181,36 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
         )}
       </AnimatePresence>
 
+      {isPhone ? (
+        /* One row on a phone: what is playing, the transport, the queue; the seek bar under it.
+           Volume, download, playback options and lyrics are desktop-width luxuries here. */
+        <div
+          className="group/playerbar flex shrink-0 flex-col gap-1 bg-background px-3 pb-1.5 pt-2"
+          onClick={handlePlayerBarClick}
+        >
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <TrackInfo />
+            </div>
+            <PlaybackControls compact extraControlsAlwaysVisible />
+            <button
+              type="button"
+              className={cn(
+                "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isQueueOpen ? "bg-card text-primary" : "text-muted-foreground",
+              )}
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleQueue();
+              }}
+              aria-label={isQueueOpen ? "Close queue" : "Open queue"}
+            >
+              <QueuePanelIcon size={18} />
+            </button>
+          </div>
+          <SeekBar />
+        </div>
+      ) : (
       <div
         className="group/playerbar flex shrink-0 flex-col gap-1 bg-background px-4 pb-3 pt-2"
         onClick={handlePlayerBarClick}
@@ -234,6 +266,7 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
           </div>
         </div>
       </div>
+      )}
     </>
   );
 }

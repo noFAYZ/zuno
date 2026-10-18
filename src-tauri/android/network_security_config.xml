@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Zuno plays audio by pointing an <audio> element at a tiny HTTP server it runs on 127.0.0.1.
+  Release builds of an Android app refuse all plain-http traffic by default, which makes every
+  song fail to load. Only loopback is opened up here; everything else stays HTTPS-only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

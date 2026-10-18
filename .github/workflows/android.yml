@@ -60,13 +60,22 @@ jobs:
       - name: Generate the Android project
         run: npx tauri android init --ci
 
-      - name: Add permissions
+      - name: Patch the Android manifest
         run: |
-          manifest=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          app=src-tauri/gen/android/app/src/main
+          manifest="$app/AndroidManifest.xml"
+
           for permission in INTERNET WAKE_LOCK; do
             grep -q "android.permission.${permission}\"" "$manifest" || \
               sed -i "s#<application#<uses-permission android:name=\"android.permission.${permission}\" />\n    <application#" "$manifest"
           done
+
+          # Lets the <audio> element reach the app's own 127.0.0.1 media server.
+          mkdir -p "$app/res/xml"
+          cp src-tauri/android/network_security_config.xml "$app/res/xml/network_security_config.xml"
+          sed -i 's#<application#<application android:networkSecurityConfig="@xml/network_security_config"#' "$manifest"
+
+          cat "$manifest"
 
       - name: Build
         # The updater artifacts need a signing key and the updater plugin is desktop-only.

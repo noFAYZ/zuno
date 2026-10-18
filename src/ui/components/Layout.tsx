@@ -5,6 +5,7 @@ import { SearchBar } from "./SearchBar";
 import { TrackArtwork } from "./TrackArtwork";
 import { useAmbientArtwork } from "../stores/ambientArtworkStore";
 import { Sidebar } from "./Sidebar";
+import { useCompactViewport } from "../hooks/useCompactViewport";
 import type { Album, Playlist } from "../../datasource/types";
 
 interface LayoutProps {
@@ -59,6 +60,7 @@ export function Layout({
   scrollKey,
 }: LayoutProps) {
   const ambientArtwork = useAmbientArtwork();
+  const isPhone = useCompactViewport();
   const pageContentRef = useRef<HTMLDivElement>(null);
   /** One entry per `scrollKey` ever visited this session. Ephemeral on purpose — a browser tab
    *  does not persist scroll across a reload either, and it would go stale against content that
@@ -232,7 +234,7 @@ export function Layout({
      
 
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        {!hideSidebar && (
+        {!hideSidebar && !isPhone && (
           <Sidebar
             width={sidebarWidth}
             onWidthChange={onSidebarWidthChange}
@@ -242,7 +244,7 @@ export function Layout({
         )}
         {/* No backdrop-blur: `bg-background` is fully opaque, so a backdrop filter here costs a
             composited layer and a blur pass to render something nothing can see through. */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background rounded-tl-lg">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 max-md:px-3 max-md:pt-2 bg-background rounded-tl-lg">
           {/*
             Ambient wash for the page beneath. Rendered here rather than inside the page so
             it can start at the very top of the column — behind the search bar — instead of
@@ -301,7 +303,7 @@ export function Layout({
                 ref={pageContentRef}
                 className={cn(
                   "h-full overflow-y-auto overscroll-contain rounded-xl ",
-                  fullBleedContent ? "p-0" : "p-4",
+                  fullBleedContent ? "p-0" : "p-4 max-md:p-2",
                 )}
                 data-page-scroll-root
               >
@@ -389,8 +391,16 @@ export function Layout({
           </div>
         </div>
 
+ {/* Phone: the queue is its own screen, not a 340px column squeezed beside the page. */}
+            {isPhone && rightPanel && (
+              <div
+                className="fixed inset-0 z-40 flex flex-col bg-card pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]"
+              >
+                <div className="min-h-0 flex-1">{rightPanel}</div>
+              </div>
+            )}
  <AnimatePresence initial={false}>
-              {rightPanel && (
+              {!isPhone && rightPanel && (
                 <motion.div
                   ref={rightPanelRef}
                   initial={{ width: 0, opacity: 0 }}

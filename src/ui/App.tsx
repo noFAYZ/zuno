@@ -93,6 +93,8 @@ import {
   type OnboardingStep,
 } from "./components/Onboarding";
 import { isAndroid, isLinux, isMacOS } from "./platform";
+import { useCompactViewport } from "./hooks/useCompactViewport";
+import { MobileNav } from "./components/MobileNav";
 import { useReduceMotion } from "./settings/renderEffects";
 
 import { emit, listen } from "@tauri-apps/api/event";
@@ -379,6 +381,7 @@ export default function App() {
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const isQueuePanelCollapsed = useQueuePanelCollapsed();
   const nativeWindowControls = useNativeWindowControls();
+  const isPhone = useCompactViewport();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
@@ -1993,7 +1996,7 @@ useEffect(() => {
       webview there, so this edge would just be a stray line under the OS title bar.
     */}
     <div
-      className={`relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ${
+      className={`relative flex h-screen max-md:h-dvh flex-col overflow-hidden rounded-[var(--window-radius)] ${
         nativeWindowControls ? "" : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
       }`}
     >
@@ -2004,7 +2007,11 @@ useEffect(() => {
     /> */}
       {/* Dropped entirely in full-screen lyrics, not just visually hidden: the window is
           real OS fullscreen at that point, so there is no frame left to drag or minimize. */}
-      {!playerUIState.isLyricsFullscreen && (
+      {isPhone && (
+        // Status-bar clearance; the title bar's tabs and window controls do not exist on a phone.
+        <div className="shrink-0 bg-background" style={{ height: "env(safe-area-inset-top)" }} />
+      )}
+      {!playerUIState.isLyricsFullscreen && !isPhone && (
       <TitleBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -2233,6 +2240,16 @@ useEffect(() => {
           </ErrorBoundary>
         </div>
       </div>
+      {isPhone && !playerUIState.isLyricsFullscreen && (
+        <MobileNav
+          activeView={activeTab?.view}
+          onHome={handleNavigateHome}
+          onSearch={() => setIsSearchOpen(true)}
+          onLibrary={handleOpenLibrary}
+          onBrowse={() => handleOpenBrowse()}
+          onSettings={handleOpenSettings}
+        />
+      )}
       <SearchOverlay
         isOpen={isSearchOpen && activeTab?.view !== "settings"}
         activeTabId={activeTabId}
