@@ -1,4 +1,7 @@
 use crate::{http_client_builder, CommandError, KEYRING_SERVICE};
+// On Android the crate-local credential store (src/keyring.rs) stands in for the `keyring` crate.
+#[cfg(target_os = "android")]
+use crate::keyring;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
