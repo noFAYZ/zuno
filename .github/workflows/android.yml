@@ -36,12 +36,14 @@ jobs:
           java-version: 17
 
       - name: Install NDK
-        # The runner image already has the Android SDK (ANDROID_HOME) and sdkmanager.
+        # The runner image has the Android SDK (ANDROID_HOME) but sdkmanager is not on PATH.
         run: |
+          sdkmanager="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager" || { echo "sdkmanager not found under ${ANDROID_HOME}"; ls "${ANDROID_HOME}/cmdline-tools"; exit 1; }
           set +o pipefail
-          yes | sdkmanager --licenses >/dev/null || true
+          yes | "$sdkmanager" --licenses >/dev/null || true
           set -o pipefail
-          sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
+          "$sdkmanager" "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
           echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
