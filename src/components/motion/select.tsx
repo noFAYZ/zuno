@@ -34,8 +34,8 @@ const LIST_VARIANTS: Variants = {
   show: { transition: { staggerChildren: 0.035, delayChildren: 0.05 } },
 };
 const ITEM_VARIANTS: Variants = {
-  hidden: { opacity: 0, y: -6, filter: "blur(3px)" },
-  show: { opacity: 1, y: 0, filter: "blur(0px)" },
+  hidden: { opacity: 0, y: -6 },
+  show: { opacity: 1, y: 0 },
 };
 
 type Placement = "bottom" | "top";
@@ -407,13 +407,14 @@ export function SelectItem({
   children,
 }: SelectItemProps) {
   const ctx = useSelectContext("SelectItem");
+  const { register, unregister } = ctx;
   const selected = ctx.value === value;
   const label = typeof children === "string" ? children : value;
 
   useLayoutEffect(() => {
-    ctx.register(value, label);
-    return () => ctx.unregister(value);
-  }, [ctx.register, ctx.unregister, value, label]);
+    register(value, label);
+    return () => unregister(value);
+  }, [register, unregister, value, label]);
 
   return (
     <motion.li variants={ctx.reduce ? undefined : ITEM_VARIANTS}>

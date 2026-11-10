@@ -27,7 +27,7 @@ pub(crate) const BAND_COUNT: usize = BAND_HZ.len();
  * Wider (lower Q) and neighbouring sliders fight each other, so moving one visibly changes two;
  * narrower and a boost is a whistle rather than a tone control.
  */
-const BAND_Q: f32 = 1.414_213_6;
+const BAND_Q: f32 = std::f32::consts::SQRT_2;
 
 /// Gains beyond this are not tone control any more, and the preamp cannot buy back the headroom.
 const MAX_GAIN_DB: f32 = 12.0;

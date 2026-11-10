@@ -520,6 +520,16 @@ export function useOfflineEntries(): Record<string, OfflineEntry> {
   return useSyncExternalStore(subscribe, () => state.entries, () => state.entries);
 }
 
+/** One track's status: a long list re-renders only the rows whose status changed. */
+export function useOfflineStatus(trackId: string): OfflineStatus {
+  return useSyncExternalStore(subscribe, () => getOfflineStatus(trackId), () => "absent");
+}
+
+/** Progress of the download in flight, for the one row showing it. */
+export function useOfflineProgress(): number | null {
+  return useSyncExternalStore(subscribe, () => state.progress, () => null);
+}
+
 export function useOfflineState(): OfflineState {
   return useSyncExternalStore(subscribe, getOfflineState, getOfflineState);
 }
