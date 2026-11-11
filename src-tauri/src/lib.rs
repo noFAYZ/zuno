@@ -285,8 +285,11 @@ fn error_cause_chain(error: &dyn std::error::Error) -> String {
 }
 
 fn is_youtube_cookie_host(url: &url::Url) -> bool {
-    url.host_str()
-        .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
+    // HTTPS only: the jar holds Secure cookies, which must never travel in plaintext.
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
 }
 
 /// Whether this rotation may wait for `YOUTUBE_COOKIE_PERSIST_INTERVAL` before being stored.
@@ -2298,7 +2301,6 @@ fn update_youtube_music_account_profile(
     save_account_store(&app, &store)
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn cookie_domain_matches(host: &str, cookie_domain: Option<&str>) -> bool {
     let Some(cookie_domain) = cookie_domain else {
         return false;
@@ -2519,7 +2521,8 @@ fn remove_login_partition(app: &tauri::AppHandle, slot_id: &str) {
 fn harvest_session_cookie(
     window: &tauri::Webview,
 ) -> Result<Option<String>, CommandError> {
-    #[cfg(target_os = "macos")]
+    // Not `cookies_for_url`: Tauri holds the webview's lock until the main thread replies, and a
+    // focus change handled while WebView2 fetches the cookies needs that lock, so it deadlocked.
     let cookies = window
         .cookies()
         .map_err(|error| CommandError {
@@ -2528,19 +2531,6 @@ fn harvest_session_cookie(
         .into_iter()
         .filter(|cookie| cookie_domain_matches("music.youtube.com", cookie.domain()))
         .collect::<Vec<_>>();
-    #[cfg(not(target_os = "macos"))]
-    let cookies = {
-        let cookie_url: url::Url = "https://music.youtube.com/"
-            .parse()
-            .map_err(|error| CommandError {
-                message: format!("invalid YouTube Music cookie URL: {error}"),
-            })?;
-        window
-            .cookies_for_url(cookie_url)
-            .map_err(|error| CommandError {
-                message: format!("unable to read YouTube Music session: {error}"),
-            })?
-    };
 
     let cookie_names = cookies
         .iter()
@@ -5495,6 +5485,7 @@ mod tests {
         assert!(youtube("https://youtube.com/"));
         // A suffix match alone would hand the session to a lookalike domain.
         assert!(!youtube("https://notyoutube.com/"));
+        assert!(!youtube("http://music.youtube.com/"));
         assert!(!youtube("https://rr6.googlevideo.com/videoplayback"));
     }
 
