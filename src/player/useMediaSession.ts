@@ -6,6 +6,7 @@ import type { PlayerControllerActions } from "./playerStore";
 import { logInternalWarn } from "../internal/logging";
 import { useLinuxMediaSession } from "../ui/settings/mediaSession";
 import { useOfflineArtworkUrl } from "./offlineStore";
+import { onPosition } from "./rustAudio";
 
 type NativeMediaAction =
   | "play"
@@ -170,11 +171,22 @@ export function useMediaSession(
     sendNativeMediaUpdate("position");
     if (state.status !== "playing") return;
 
-    const intervalId = window.setInterval(
-      () => sendNativeMediaUpdate("position"),
-      1000,
-    );
-    return () => window.clearInterval(intervalId);
+    /*
+     * Rust's position events too: a hidden, silent page's timers drop to about one a minute, and
+     * the OS reads back whatever position was sent last, so tray playback drifted (#79).
+     */
+    let sentAt = performance.now();
+    const tick = () => {
+      if (performance.now() - sentAt < 900) return;
+      sentAt = performance.now();
+      sendNativeMediaUpdate("position");
+    };
+    const intervalId = window.setInterval(tick, 1000);
+    const stopListening = onPosition(tick);
+    return () => {
+      window.clearInterval(intervalId);
+      stopListening();
+    };
   }, [nativeMediaCommand, sendNativeMediaUpdate, state.currentTrack, state.status]);
 
   useEffect(() => {
