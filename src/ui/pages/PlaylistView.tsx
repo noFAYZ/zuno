@@ -25,6 +25,14 @@ import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
 import { collectTrackPages } from "./collectTrackPages";
 import { loadFailedMessage } from "../../internal/connectivity";
+import {
+  setPlaylistSort,
+  setPlaylistSortDirection,
+  usePlaylistSort,
+  usePlaylistSortDirection,
+  type PlaylistSort,
+  type SortDirection,
+} from "../settings/sortPreferences";
 
 /*
  * Collapsed search affordance that widens on hover/focus or while it holds a query —
@@ -49,9 +57,6 @@ interface PlaylistViewProps {
   playerController: PlayerControllerActions;
   libraryController: LibraryController;
 }
-
-type PlaylistSort = "dateAdded" | "name" | "album";
-type SortDirection = "asc" | "desc";
 
 const playlistSorts: Array<{ value: PlaylistSort; label: string }> = [
   { value: "name", label: "Name" },
@@ -251,8 +256,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const [nextPageKey, setNextPageKey] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [sort, setSort] = useState<PlaylistSort>("dateAdded");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const sort = usePlaylistSort();
+  const sortDirection = usePlaylistSortDirection();
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState("");
   const [dropTargetIndex, setDropTargetIndex] = useState<{ localPath: string; insertAfter: boolean } | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -294,8 +299,11 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
    * Reordering now reaches YouTube too, not just local playlists. Liked Songs is excluded
    * because it has no user-defined order to persist.
    */
+  // Dragging only makes sense in the playlist's own order; in a sorted view the drop lands elsewhere.
   const canReorderTracks = Boolean(
     playlist
+      && sort === "dateAdded"
+      && sortDirection === "desc"
       && (isLocalPlaylistView
         || (playlist.isEditable !== false && !isLikedSongsId(playlist.id, playlist.kind))),
   );
@@ -303,8 +311,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   useEffect(() => {
     if (!playlist) return;
     let active = true;
-    setSort("dateAdded");
-    setSortDirection("desc");
     setPlaylistSearchQuery("");
     setTracks([]);
     setIsLoading(true);
@@ -695,11 +701,11 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
 
   const selectSort = (nextSort: PlaylistSort) => {
     if (nextSort === sort) {
-      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+      setPlaylistSortDirection(sortDirection === "asc" ? "desc" : "asc");
       return;
     }
-    setSort(nextSort);
-    setSortDirection(nextSort === "dateAdded" ? "desc" : "asc");
+    setPlaylistSort(nextSort);
+    setPlaylistSortDirection(nextSort === "dateAdded" ? "desc" : "asc");
   };
 
   const handlePlaylistSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {

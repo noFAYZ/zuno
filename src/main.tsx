@@ -13,6 +13,7 @@ import {
 import { hydrateMiniPlayerSettings } from "./ui/settings/miniPlayer";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
 import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
+import { hydrateSortPreferences } from "./ui/settings/sortPreferences";
 import { hydrateTraySettings } from "./ui/settings/tray";
 import { hydrateMediaSessionSettings } from "./ui/settings/mediaSession";
 import { hydrateAudioQualitySettings } from "./internal/audioQuality";
@@ -69,6 +70,7 @@ void Promise.all([
   hydrateMiniPlayerSettings(),
   hydratePlayerControlSettings(),
   hydrateQueuePanelSettings(),
+  hydrateSortPreferences(),
   hydrateTraySettings(),
   hydrateAudioQualitySettings(),
   hydrateAudioEngineMode(),
