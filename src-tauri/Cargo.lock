@@ -6884,6 +6884,7 @@ dependencies = [
  "block2",
  "discord-rich-presence",
  "futures-util",
+ "gtk",
  "keyring",
  "lofty",
  "md5",
