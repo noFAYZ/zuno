@@ -1,51 +1,63 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "notes": "",
-  "pub_date": "2026-08-26T21:49:18.243Z",
+  "pub_date": "2026-11-11T12:39:41.553Z",
   "platforms": {
-    "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWhBaVliUFAybnBaeFgxeTlJWWVXMk9WMHFCUWJSUlhVVW4yeVVyRkkzZlVXV1VOZ3JRN1ZGMmVTNEcrZVA4K3k1WkRoeE5ZRnhEN0c3MWlXYzAxVmdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwMzg0CWZpbGU6WnVuby5hcHAudGFyLmd6CnlNMWtsdEh3ZysrTWdFWXB4d05FOGQ3VWJUR0pxNnpQN1pQMWowRDRFR2RhZ0lVVzJRLzVyTUlUK2xzOWNDaXJFVWFmWWhJekU0R3JhdVNPT2hlWkRnPT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_aarch64.app.tar.gz"
-    },
-    "darwin-aarch64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWhBaVliUFAybnBaeFgxeTlJWWVXMk9WMHFCUWJSUlhVVW4yeVVyRkkzZlVXV1VOZ3JRN1ZGMmVTNEcrZVA4K3k1WkRoeE5ZRnhEN0c3MWlXYzAxVmdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwMzg0CWZpbGU6WnVuby5hcHAudGFyLmd6CnlNMWtsdEh3ZysrTWdFWXB4d05FOGQ3VWJUR0pxNnpQN1pQMWowRDRFR2RhZ0lVVzJRLzVyTUlUK2xzOWNDaXJFVWFmWWhJekU0R3JhdVNPT2hlWkRnPT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_aarch64.app.tar.gz"
-    },
-    "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXY3bjNLUkhVekFEcVpJbStPYzVYRGZEN2NMNk82Vi9XVXMzcGxheUE1YTFXOUdDNWRtUy9DTlZBUTd2MUhVT294MXVUeitkTWVkUm9HazN2Y0U5QmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNDU3CWZpbGU6WnVub18xLjQuMF9hbWQ2NC5BcHBJbWFnZQpEcCtFRkNzc3l0NC9YZVV1S2xHcFp3UDAwNWVlKzc2cGE1cWlxV3pJeHJxYXhOVktzZzZJbWZxSWZwN21XNGQ0MUZWSXJZYVhYN0VmeVBnanBBZWxBZz09Cg==",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_amd64.AppImage"
-    },
-    "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXY3bjNLUkhVekFEcVpJbStPYzVYRGZEN2NMNk82Vi9XVXMzcGxheUE1YTFXOUdDNWRtUy9DTlZBUTd2MUhVT294MXVUeitkTWVkUm9HazN2Y0U5QmdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNDU3CWZpbGU6WnVub18xLjQuMF9hbWQ2NC5BcHBJbWFnZQpEcCtFRkNzc3l0NC9YZVV1S2xHcFp3UDAwNWVlKzc2cGE1cWlxV3pJeHJxYXhOVktzZzZJbWZxSWZwN21XNGQ0MUZWSXJZYVhYN0VmeVBnanBBZWxBZz09Cg==",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_amd64.AppImage"
-    },
-    "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWplT0NwQXdDdDFtbnl3cXB6blo5di9WTXkvbjNjODZMSmZpVEFUL0MyL2hLU3hLelVSR0FaYmpzeFRnZFZ3a2hGaHFhMjdwZWU1YWdRZFpnOTF4QkFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNDU3CWZpbGU6WnVub18xLjQuMF9hbWQ2NC5kZWIKT1ZUU1AyVEVQNnFFaXJJaTBRMS81L0w4RVVYMWIyS0QvSTVIUGo5SFVrRFBGSmQ3V1pNR3E4WmZ3VENIMTUrY2JEQVVmclVPNDNRQ0FweUgrT1N0RFE9PQo=",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_amd64.deb"
-    },
-    "linux-x86_64-rpm": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTW1mb3ZCSktZMi82cDh1c2VEMDA4bkxSdXhQaUREMk1xOHIxTHovaUplbXpCZ1pFUW1ZWm5ucjFEZHdxVWF2N3R1cnFMdGZhcWxuSldYUDBiQ3RqekFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNDU3CWZpbGU6WnVuby0xLjQuMC0xLng4Nl82NC5ycG0KUEFVWWM3TUFSMitGR2s5cjdqNVJVN0ErdGp0WTU1QmxUV3ZIcm1WcVljaUJ1TEd0ME9wWkpoQlUzQlp1TEJZZ1IyYkZSK05oQXp2TG5TMHd5S3MwQXc9PQo=",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno-1.4.0-1.x86_64.rpm"
-    },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXUrRE5iV0JyamxYQ3dhZnZ5dnhvdTR3bk1tbTVGZjljZzFZRy9wT3pvZ2xSVHJ6UXozTzVjcHBwRktMVC9DeE02RkVUaU5PTitsbkR6LzZiclRwYVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNTUyCWZpbGU6WnVub18xLjQuMF94NjQtc2V0dXAuZXhlCml4bGJHekFmNmJsZlBPOVlxcjUvWDRFcVk0Zi9QSGY3QmFXeVNsTm5jVzJ0enN0UjM4TDRxbkwzUU5TQW9iYjRCVWhROWNWdnR4ckxnTmFXUG80ZkRRPT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWdiakFLL3VTQWM4L0VvWXByUzVwMGJXRFc4RzJxVlQ5czVlbm0yT1p2SmNJVEJvUVBVbmdlenVtREZCY3FNRmQxTHlvbnV6bUNHR0draEpCUDJocEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5ODg4CWZpbGU6WnVub18xLjUuMF94NjQtc2V0dXAuZXhlClZybFlHYk1JN0NLTUlmUmhBTkU0dDJkSFdkL3lhUi9kUjgxZUhyQWtZZ1Rzcm1tMXN4ZXcvMklwZXBQcm4wWGtsU2NtSUdqUVExN3NMTzJxdG1abERRPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXUrRE5iV0JyamxYQ3dhZnZ5dnhvdTR3bk1tbTVGZjljZzFZRy9wT3pvZ2xSVHJ6UXozTzVjcHBwRktMVC9DeE02RkVUaU5PTitsbkR6LzZiclRwYVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNTUyCWZpbGU6WnVub18xLjQuMF94NjQtc2V0dXAuZXhlCml4bGJHekFmNmJsZlBPOVlxcjUvWDRFcVk0Zi9QSGY3QmFXeVNsTm5jVzJ0enN0UjM4TDRxbkwzUU5TQW9iYjRCVWhROWNWdnR4ckxnTmFXUG80ZkRRPT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWdiakFLL3VTQWM4L0VvWXByUzVwMGJXRFc4RzJxVlQ5czVlbm0yT1p2SmNJVEJvUVBVbmdlenVtREZCY3FNRmQxTHlvbnV6bUNHR0draEpCUDJocEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5ODg4CWZpbGU6WnVub18xLjUuMF94NjQtc2V0dXAuZXhlClZybFlHYk1JN0NLTUlmUmhBTkU0dDJkSFdkL3lhUi9kUjgxZUhyQWtZZ1Rzcm1tMXN4ZXcvMklwZXBQcm4wWGtsU2NtSUdqUVExN3NMTzJxdG1abERRPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_x64-setup.exe"
     },
     "windows-x86_64-msi": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWcvQXFweUVWT3dOMTdkTmIreXhCYjlrOTduajBEWm91QzVrbUNRaVp5cmFobEdTTnI1RTZqVWZPaWgyaEJzTEpGdlNMS1Z1b2ovTnk5Q2Q0U1NXZFFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwNTUyCWZpbGU6WnVub18xLjQuMF94NjRfZW4tVVMubXNpClFheGp3TCs3dENnbkMvWG1ZR1JNV0ZoSnd2ZlE2bkdmU3pxamVLeUxZVUI0V1RCanZPV3B4VjRmMWZEb0lWRVcrbDV2Y25PK3hoeEkxSjJjclpsWkRBPT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_1.4.0_x64_en-US.msi"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXVUQVVmK3VtRG1NajBKc2FzQ0NWM3Q1V0pzMCs3TGphZVFWcnU1cGRTT0RsWWhYcXZqWW1KNkhOMS9rQ21pclV0ZkpqdndPcTA4VjJTOVljSC9lK3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5ODg4CWZpbGU6WnVub18xLjUuMF94NjRfZW4tVVMubXNpCjhtbFB2K085LzVJL3JLZVZGeU0yYVh1MXRCME5mUVVEbzR6VXM5ZVhxS2MrcEdXSEpvdDJZTGFJWVRrcllaMDJwQ2FZaWZxakVUb2Z5MkNSelJPUEF3PT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_x64_en-US.msi"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXZKV3BueWkzNDFyMHZtRXl5NUYyRWxtNGJxT2d0SjZKZ3NZUjNzNnE1MDIzbENsRjFveWR0TGJKQTNPMjVZdU1qc1dhMjRsZ3N2SXZHY2VTMnh6MHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTI5CWZpbGU6WnVuby5hcHAudGFyLmd6ClBqRGFNTGRuWkFrV2hPc3l2YUVzTnpUYkZZakRmcWRlM2RyWmMrTWd0QWVYVW15N0FUNjVYWHJiaVpVcVJSMFVwQ2podWJiajhtWUlJaFg5alRjSENnPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_aarch64.app.tar.gz"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXZKV3BueWkzNDFyMHZtRXl5NUYyRWxtNGJxT2d0SjZKZ3NZUjNzNnE1MDIzbENsRjFveWR0TGJKQTNPMjVZdU1qc1dhMjRsZ3N2SXZHY2VTMnh6MHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTI5CWZpbGU6WnVuby5hcHAudGFyLmd6ClBqRGFNTGRuWkFrV2hPc3l2YUVzTnpUYkZZakRmcWRlM2RyWmMrTWd0QWVYVW15N0FUNjVYWHJiaVpVcVJSMFVwQ2podWJiajhtWUlJaFg5alRjSENnPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_aarch64.app.tar.gz"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXBVaFlVZHd6OGFpYWhEbUwrV3diZ3F0R2JhSkpHZ2k2MWtjYm1xU2IvdVFuKzFEc3h2QUNSS2o4Nmp6TUQwYUdNOEtjMWwzUUgxb2ovZnlkREIrS3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTg3CWZpbGU6WnVub18xLjUuMF9hbWQ2NC5BcHBJbWFnZQpWTUtycWcyaFpnV0xiRXVTMjdyaS9ZR1hteWJpSE9KTHBoait2aG5VR0VZOS9Hd3pFT2lvdnZSMCttWlJKeXNWY09QcDJDL3EvUEdFVnBEOGNJNUpBUT09Cg==",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_amd64.AppImage"
+    },
+    "linux-x86_64-appimage": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXBVaFlVZHd6OGFpYWhEbUwrV3diZ3F0R2JhSkpHZ2k2MWtjYm1xU2IvdVFuKzFEc3h2QUNSS2o4Nmp6TUQwYUdNOEtjMWwzUUgxb2ovZnlkREIrS3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTg3CWZpbGU6WnVub18xLjUuMF9hbWQ2NC5BcHBJbWFnZQpWTUtycWcyaFpnV0xiRXVTMjdyaS9ZR1hteWJpSE9KTHBoait2aG5VR0VZOS9Hd3pFT2lvdnZSMCttWlJKeXNWY09QcDJDL3EvUEdFVnBEOGNJNUpBUT09Cg==",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_amd64.AppImage"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXNOODBNSDFIK0Zzc0xDYW12MlZyY3BMYzNHakxBMytZNzFuaFVCYkhyQlRFYXhSUjdyYmV2QVF1dHF6ZzAvTVgwWjlYUDh2d3p6MHIrektBZHkzN2d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTg3CWZpbGU6WnVub18xLjUuMF9hbWQ2NC5kZWIKMGJKTEpEZFBrWEkxbmxmbHRhMmNTREsyZC9ud2ZIVkhCbk1MdHBNT2dFMERNM1NpWVhLc0hmM3BDZzVPN0ZJdnRWZWh5U1gzRnljQ1F0d0RrK3B2Qnc9PQo=",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_amd64.deb"
+    },
+    "linux-x86_64-rpm": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWh3aTVsbVBuOXVTV092LytvdlBhWk5QRGR1K0VDTSswS2ZzUEV4V2ErYm5ZdStxWmFYaVRxWlNLNEJkSjEySFRXQTA0djZINzZmQTVyVkNDUDlKaHdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk5OTg3CWZpbGU6WnVuby0xLjUuMC0xLng4Nl82NC5ycG0KVFBkd09ONUFSbnpXVG1ZY1VJN2hUdjNRQnU4WUZpOFB2YXE1L3ZmYkxsYjdVWk1sQVdjUmNYenAvRzkxdWtMaVpzeWh1dkN5aWhlQ0p6ZjhLZUhXRHc9PQo=",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno-1.5.0-1.x86_64.rpm"
+    },
+    "windows-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWpoZlk5OEo5VC9ieGNqMi9hSWNsckJndStBTGo5enprUkZ4d3RkNzJ4R0xocGJLRUF0ZlNHSEJaQ3BqQWIxTTdTQ2laZERnMHZBNXZuUDhDT3FVV3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDAwMTc4CWZpbGU6WnVub18xLjUuMF9hcm02NC1zZXR1cC5leGUKSXAvWUp1NlBSaW0vL3RFZVJDdzc5NTN1TDU2RlhremRkU1U2ZEpGNWt5ZjFxMG5lVFhiOUkyeHVFUVVqQ1JxUjh6eVJ0SmQ5bE9oazkvVFd5djB1Q2c9PQo=",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_arm64-setup.exe"
+    },
+    "windows-aarch64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWpoZlk5OEo5VC9ieGNqMi9hSWNsckJndStBTGo5enprUkZ4d3RkNzJ4R0xocGJLRUF0ZlNHSEJaQ3BqQWIxTTdTQ2laZERnMHZBNXZuUDhDT3FVV3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDAwMTc4CWZpbGU6WnVub18xLjUuMF9hcm02NC1zZXR1cC5leGUKSXAvWUp1NlBSaW0vL3RFZVJDdzc5NTN1TDU2RlhremRkU1U2ZEpGNWt5ZjFxMG5lVFhiOUkyeHVFUVVqQ1JxUjh6eVJ0SmQ5bE9oazkvVFd5djB1Q2c9PQo=",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_arm64-setup.exe"
+    },
+    "windows-aarch64-msi": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXVDUXMwaDZyNE9WTE9tZG9RTE1kRmlmdXdjNmZ2TnNOdkpERnN6V2V3ZEZZWG1mdkpwcURBZ3dRV0xkNVNYaFkycDBkTGFnK05LM2hSNWovS2JCRHdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDAwMTc4CWZpbGU6WnVub18xLjUuMF9hcm02NF9lbi1VUy5tc2kKeTVwbHYwZWs5WU14SzRDZXR4STJCcjlTUTd4ZUt2ekdvc2hYbVZJTjZSVElQcks1WHBOTnJyUjF0Sm5qeUQ1ZWFqazh5V0xucmNsejgzMHFOMHVTQWc9PQo=",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_1.5.0_arm64_en-US.msi"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWlrRFY3YTFtSkU4d29sTldxRGMvYmtoSHg3TXRkNDduR1RhQnNzLzZjWnBSeEZHc3NEWlhkYitsNnc3WmNuQ2NEc3hpWDMrWTd2bFJDTE8ybEg2bUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwOTUzCWZpbGU6WnVuby5hcHAudGFyLmd6Cm1hZ1IzTXFla0VNS0VMcUNVNkpYcU1hQ2lRa1Z4NUJaSTU5czVseDlsbmVTODQyTk1xbjQ4bnQ3SXhTQ2FmNUJYaWE4M0pUelV1UmFkbjN0TkdaeEJ3PT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXJzWGI5VS9RMTc3VjVpMlpWc2RGT3hzV0paMkRUM1JjRm0ya0ZldnZXdm4zRVdiZTBuQWZNM09EVXN1b1ppV1IzcUZ0QmRYdkdxalVaVCsxSFpDNmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDAwNzcyCWZpbGU6WnVuby5hcHAudGFyLmd6CmNLaXM3bUxIUElNTDNweHJQUEJMVGo4MzdMSXVibm13RU5VT253d3RuS3FoNnV5ckEyV3RRdXRydVN4TU5McDRGU0t6RDZVYStkVVZUSFZFRnpaOURnPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_x64.app.tar.gz"
     },
     "darwin-x86_64-app": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTWlrRFY3YTFtSkU4d29sTldxRGMvYmtoSHg3TXRkNDduR1RhQnNzLzZjWnBSeEZHc3NEWlhkYitsNnc3WmNuQ2NEc3hpWDMrWTd2bFJDTE8ybEg2bUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzgwOTUzCWZpbGU6WnVuby5hcHAudGFyLmd6Cm1hZ1IzTXFla0VNS0VMcUNVNkpYcU1hQ2lRa1Z4NUJaSTU5czVseDlsbmVTODQyTk1xbjQ4bnQ3SXhTQ2FmNUJYaWE4M0pUelV1UmFkbjN0TkdaeEJ3PT0K",
-      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.4.0/Zuno_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUTWp4RzVFMElFTXJzWGI5VS9RMTc3VjVpMlpWc2RGT3hzV0paMkRUM1JjRm0ya0ZldnZXdm4zRVdiZTBuQWZNM09EVXN1b1ppV1IzcUZ0QmRYdkdxalVaVCsxSFpDNmdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0NDAwNzcyCWZpbGU6WnVuby5hcHAudGFyLmd6CmNLaXM3bUxIUElNTDNweHJQUEJMVGo4MzdMSXVibm13RU5VT253d3RuS3FoNnV5ckEyV3RRdXRydVN4TU5McDRGU0t6RDZVYStkVVZUSFZFRnpaOURnPT0K",
+      "url": "https://github.com/noFAYZ/zuno/releases/download/v1.5.0/Zuno_x64.app.tar.gz"
     }
   }
 }
