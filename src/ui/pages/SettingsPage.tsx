@@ -18,6 +18,7 @@ import {
   useCrossfadeSec,
   useGaplessEnabled,
 } from "../settings/playbackTransitions";
+import { setVolumeNormalization, useVolumeNormalization } from "../settings/volumeNormalization";
 import {
   setSessionRestoreEnabled,
   useSessionRestoreEnabled,
@@ -112,7 +113,6 @@ import {
   setLyricsFontScale,
   useLyricsFontScale,
 } from "../settings/lyricsFontScale";
-import { setVolumeNormalization, useVolumeNormalization } from "../settings/volumeNormalization";
 import {
   TRANSLATION_LANGUAGES,
   TRANSLATION_OFF,
@@ -640,10 +640,10 @@ export function SettingsPage({
   const youtubeScrobbling = useYouTubeScrobbling();
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
-  const volumeNormalization = useVolumeNormalization();
   const lyricsTranslationLang = useLyricsTranslationLang();
   const madeForYouVisible = useMadeForYouVisible();
   const crossfadeSec = useCrossfadeSec();
+  const volumeNormalization = useVolumeNormalization();
   const gaplessEnabled = useGaplessEnabled();
   const sessionRestoreEnabled = useSessionRestoreEnabled();
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
