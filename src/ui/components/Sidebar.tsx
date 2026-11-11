@@ -5,6 +5,7 @@ import {
   LIBRARY_SORTS,
   canReorderLibrary,
   filterLibraryEntries,
+  pinnedFirst,
   reorderBlockedReason,
   sortLibraryEntries,
   type LibrarySort,
@@ -20,6 +21,7 @@ import {
   CheckIcon,
   CloseIcon,
   FolderIcon,
+  PinIcon,
   PlaylistIcon,
   RefreshIcon,
   SearchIcon,
@@ -38,6 +40,8 @@ import {
 } from "../../player/localPlaylists";
 import { getAppSetting, setAppSetting } from "../../internal/appSettings";
 import { resolveSidebarWidth, useSidebarMode } from "../settings/sidebarMode";
+import { useHiddenPlaylistIds } from "../settings/hiddenPlaylists";
+import { usePinnedPlaylistIds } from "../settings/pinnedPlaylists";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
 import { usePlaylistContextMenu } from "./PlaylistContextMenu";
@@ -663,18 +667,25 @@ export function Sidebar({
    * instead of it — `custom` is the identity sort, so switching back to it restores exactly the
    * arrangement the user dragged into place rather than an approximation of it.
    */
+  const pinnedPlaylistIds = usePinnedPlaylistIds();
+  const hiddenPlaylistIds = useHiddenPlaylistIds();
   const visiblePlaylists = useMemo(
     () =>
-      sortLibraryEntries(
-        filterLibraryEntries(
-          playlists.map((playlist) => ({ ...playlist, subtitle: playlist.owner })),
-          libraryFilter,
+      pinnedFirst(
+        sortLibraryEntries(
+          filterLibraryEntries(
+            playlists
+              .filter((playlist) => !hiddenPlaylistIds.includes(playlist.id))
+              .map((playlist) => ({ ...playlist, subtitle: playlist.owner })),
+            libraryFilter,
+          ),
+          librarySort,
+          {
+            recencyOf: getRecentPlaylistTimestamp,
+            pinnedId: libraryState.library?.likedSongsPlaylist?.id,
+          },
         ),
-        librarySort,
-        {
-          recencyOf: getRecentPlaylistTimestamp,
-          pinnedId: libraryState.library?.likedSongsPlaylist?.id,
-        },
+        pinnedPlaylistIds,
       ),
     // `recentPlaylistsRevision` busts the memo when a play timestamp in storage changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -684,6 +695,8 @@ export function Sidebar({
       librarySort,
       recentPlaylistsRevision,
       libraryState.library?.likedSongsPlaylist?.id,
+      pinnedPlaylistIds,
+      hiddenPlaylistIds,
     ],
   );
 
@@ -1338,16 +1351,24 @@ export function Sidebar({
                     data-sidebar-item-id={playlist.id}
                     data-sidebar-item-type="playlists"
                     className={itemClasses(playlist.id, "playlists")}
-                    onPointerDown={(event) => handleSidebarItemPointerDown(event, playlist.id, "playlists")}
+                    // Pinned rows sit above the order a drag writes, so they don't start one.
+                    onPointerDown={(event) => {
+                      if (!pinnedPlaylistIds.includes(playlist.id)) {
+                        handleSidebarItemPointerDown(event, playlist.id, "playlists");
+                      }
+                    }}
                     onClick={() => handleSidebarItemClick(() => onNavigatePlaylist(playlist))}
                     onContextMenu={(event) => openPlaylistMenu(event, playlist)}
                   >
                     <SidebarPlaylistArtwork playlist={playlist} />
                     {!shouldHideText && (
-                      <div className="flex min-w-0 flex-col">
+                      <div className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-sm text-foreground">{playlist.title}</span>
                         <span className="truncate text-xs text-muted-foreground">{playlist.owner}</span>
                       </div>
+                    )}
+                    {!shouldHideText && pinnedPlaylistIds.includes(playlist.id) && (
+                      <PinIcon size={14} className="shrink-0 text-muted-foreground" aria-label="Pinned" />
                     )}
                   </button>
                   </SidebarItemTooltip>

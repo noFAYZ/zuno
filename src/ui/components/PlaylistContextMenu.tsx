@@ -9,7 +9,7 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, EyeClosedIcon, EyeIcon, ImageIcon, PencilIcon, TrashIcon } from "@/ui/icons";
+import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, EyeClosedIcon, EyeIcon, ImageIcon, PencilIcon, PinIcon, TrashIcon } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { isLocalPlaylist, LOCAL_IMAGE_PREFIX, setLocalPlaylistArtwork } from "../../player/localPlaylists";
@@ -17,6 +17,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { forgetArtworkSource } from "../../internal/artworkCache";
 import { exportPlaylist } from "../../player/playlistTransfer";
 import { hidePlaylist, unhidePlaylist, useHiddenPlaylistIds } from "../settings/hiddenPlaylists";
+import { pinPlaylist, unpinPlaylist, usePinnedPlaylistIds } from "../settings/pinnedPlaylists";
 import {
   PlaylistContext,
   type PlaylistContextMenuValue,
@@ -157,6 +158,15 @@ export function PlaylistContextMenuProvider({
     if (!playlist) return;
     if (isHiddenPlaylist) unhidePlaylist(playlist.id);
     else hidePlaylist(playlist.id);
+    setPosition(null);
+  };
+
+  const pinnedPlaylistIds = usePinnedPlaylistIds();
+  const isPinnedPlaylist = Boolean(playlist && pinnedPlaylistIds.includes(playlist.id));
+  const togglePinnedPlaylist = () => {
+    if (!playlist) return;
+    if (isPinnedPlaylist) unpinPlaylist(playlist.id);
+    else pinPlaylist(playlist.id);
     setPosition(null);
   };
 
@@ -401,6 +411,17 @@ export function PlaylistContextMenuProvider({
             >
               <CopyIcon size={18} />
               <span>Copy playlist URL</span>
+            </button>
+          )}
+          {playlist && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={togglePinnedPlaylist}
+            >
+              <PinIcon size={18} />
+              <span>{isPinnedPlaylist ? "Unpin from sidebar" : "Pin to sidebar"}</span>
             </button>
           )}
           {playlist && (

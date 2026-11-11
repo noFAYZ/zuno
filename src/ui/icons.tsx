@@ -84,6 +84,7 @@ export { SettingsIcon } from "@solar-icons/react/linear/settings";
 export { SettingsIcon as SettingsActiveIcon } from "@solar-icons/react/bold/settings";
 export { ListIcon } from "@solar-icons/react/linear/list";
 export { SortIcon } from "@solar-icons/react/linear/sort";
+export { PinIcon } from "@solar-icons/react/linear/pin";
 export { CloseCircleIcon as CloseIcon } from "@solar-icons/react/linear/close-circle";
 export { CloseCircleIcon as CloseActiveIcon } from "@solar-icons/react/bold/close-circle";
 export { FullScreenIcon } from "@solar-icons/react/linear/full-screen";
