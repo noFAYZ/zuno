@@ -144,6 +144,11 @@ export function artworkIdentity(url: string): string {
   return normalized;
 }
 
+/** The largest variant worth asking for, for the full-size cover view (#174). */
+export function getFullSizeArtworkUrl(url: string): string {
+  return withYoutubeSize(normalizeArtworkUrl(url), 1200) ?? url;
+}
+
 export function getVideoArtworkFallback(videoId: string): string | undefined {
   return /^[A-Za-z0-9_-]{11}$/.test(videoId)
     ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
