@@ -112,6 +112,7 @@ import {
   setLyricsFontScale,
   useLyricsFontScale,
 } from "../settings/lyricsFontScale";
+import { setZoom, useZoom, ZOOM_LEVELS } from "../settings/zoom";
 import {
   TRANSLATION_LANGUAGES,
   TRANSLATION_OFF,
@@ -206,7 +207,7 @@ import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
 } from "../settings/lastfm";
-import { isLinux, isTilingWindowManager, subscribeTilingWindowManager } from "../platform";
+import { isLinux, isMacOS, isTilingWindowManager, subscribeTilingWindowManager } from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
 import { AccountAvatar, AccountSwitcher, AddGoogleAccountButton, GoogleAccountSwitcher } from "../components/AccountSwitcher";
 import {
@@ -639,6 +640,7 @@ export function SettingsPage({
   const youtubeScrobbling = useYouTubeScrobbling();
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
+  const zoom = useZoom();
   const lyricsTranslationLang = useLyricsTranslationLang();
   const madeForYouVisible = useMadeForYouVisible();
   const crossfadeSec = useCrossfadeSec();
@@ -2259,6 +2261,30 @@ export function SettingsPage({
                 );
               })}
             </div>
+
+            <SettingRow
+              title="App size"
+              description={`Zooms the whole app. ${isMacOS ? "⌘" : "Ctrl"} with + or − works too, and 0 resets it.`}
+            >
+              {(labelId) => (
+                <Select
+                  className="w-52"
+                  value={String(zoom)}
+                  onValueChange={(value) => setZoom(Number(value))}
+                >
+                  <SelectTrigger aria-labelledby={labelId}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ZOOM_LEVELS.map((level) => (
+                      <SelectItem key={level} value={String(level)}>
+                        {`${Math.round(level * 100)}%`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="toolbar-settings-title">

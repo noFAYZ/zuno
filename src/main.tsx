@@ -41,6 +41,7 @@ import { hydratePreferredLyricsSourceId } from "./internal/lyricsSourcePreferenc
 import { hydrateToolbarItemSettings } from "./ui/settings/toolbarItems";
 import { hydrateHomeSectionSettings } from "./ui/settings/homeSections";
 import { applyRenderEffects, hydrateRenderEffects } from "./ui/settings/renderEffects";
+import { hydrateZoom, watchZoomKeys } from "./ui/settings/zoom";
 import { startMemoryReport } from "./internal/memoryReport";
 
 logInternalInfo("main.bootstrap start");
@@ -54,6 +55,7 @@ applyTheme();
 watchSystemTheme();
 applyPaperPcMode();
 applyRenderEffects();
+watchZoomKeys();
 // One line a minute in the app log, so "the renderer is using 220 MB" can be split into heap,
 // DOM, images and subframes instead of guessed at. Settings → Troubleshooting → Open log.
 startMemoryReport();
@@ -64,6 +66,7 @@ void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) =
 void Promise.all([
   hydratePaperPcMode(),
   hydrateRenderEffects(),
+  hydrateZoom(),
   hydrateTheme(),
   hydrateWindowControlSettings(),
   hydrateMediaSessionSettings(),

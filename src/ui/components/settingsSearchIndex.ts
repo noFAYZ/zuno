@@ -13,6 +13,7 @@ const ENTRIES: SettingsSearchEntry[] = [
   { tab: "about", category: "Account", title: "Discord presence", description: "Show what you are playing and hide status when paused." },
   { tab: "about", category: "Account", title: "Updates", description: "Check for and install Zuno updates." },
   { tab: "appearance", category: "Appearance", title: "Theme", description: "Choose light, dark, or system theme." },
+  { tab: "appearance", category: "Appearance", title: "App size", description: "Zoom the whole app in or out. Ctrl + and Ctrl - work too." },
   { tab: "appearance", category: "Appearance", title: "Motion", description: "Control animations and visual effects." },
   { tab: "appearance", category: "Appearance", title: "Toolbar", description: "Choose which controls appear in the title bar." },
   { tab: "appearance", category: "Appearance", title: "Onboarding", description: "Restart the first-run introduction." },

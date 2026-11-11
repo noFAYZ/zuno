@@ -38,7 +38,8 @@
     "core:window:allow-set-size",
     "core:window:allow-cursor-position",
     "core:window:allow-set-cursor-icon",
-    "core:window:allow-set-ignore-cursor-events"
+    "core:window:allow-set-ignore-cursor-events",
+    "core:webview:allow-set-webview-zoom"
   ],
   "remote": {
     "urls": [
