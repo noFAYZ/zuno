@@ -10,7 +10,7 @@
  * one — so a source reads shared state rather than capturing gains when it was built.
  */
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -93,6 +93,25 @@ static EQUALIZER: EqualizerState = EqualizerState {
     generation: AtomicU64::new(0),
     values: Mutex::new(EqualizerValues::FLAT),
 };
+
+/// Whether each track's loudness gain applies (#181). Toggling it retunes live sources too.
+static NORMALIZE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_normalize(enabled: bool) {
+    NORMALIZE.store(enabled, Ordering::Release);
+    EQUALIZER.generation.fetch_add(1, Ordering::Release);
+}
+
+/**
+ * The gain that brings a track to YouTube's loudness reference: `loudness_db` above it is turned
+ * down, quieter tracks are left alone.
+ *
+ * ponytail: attenuation only, as YouTube's own player does. Boosting quiet tracks would lean on
+ * the limiter and pump; add a capped boost if quiet tracks turn out to matter.
+ */
+fn loudness_gain(loudness_db: Option<f32>) -> f32 {
+    loudness_db.filter(|db| db.is_finite()).map_or(1.0, |db| 10f32.powf(-db.max(0.0) / 20.0))
+}
 
 pub(crate) fn set_values(values: EqualizerValues) {
     if let Ok(mut guard) = EQUALIZER.values.lock() {
@@ -200,13 +219,15 @@ pub(crate) struct EqualizedSource<S> {
     /// stream filters left against right and produces a mess.
     filters: Vec<[Biquad; BAND_COUNT]>,
     channel_index: usize,
-    preamp: f32,
+    /// The preamp times the loudness gain while normalisation is on.
+    gain: f32,
+    loudness_gain: f32,
     bypass: bool,
     generation: u64,
 }
 
 impl<S: Source> EqualizedSource<S> {
-    pub(crate) fn new(inner: S) -> Self {
+    pub(crate) fn new(inner: S, loudness_db: Option<f32>) -> Self {
         let channels = inner.channels().get() as usize;
         let sample_rate = inner.sample_rate().get() as f32;
         let mut source = Self {
@@ -214,7 +235,8 @@ impl<S: Source> EqualizedSource<S> {
             sample_rate,
             filters: vec![[Biquad::PASSTHROUGH; BAND_COUNT]; channels.max(1)],
             channel_index: 0,
-            preamp: 1.0,
+            gain: 1.0,
+            loudness_gain: loudness_gain(loudness_db),
             bypass: true,
             // Not the live generation: starting one behind forces the first sample to load
             // whatever the user already had set before this track began.
@@ -227,12 +249,13 @@ impl<S: Source> EqualizedSource<S> {
     fn reload(&mut self) {
         self.generation = EQUALIZER.generation.load(Ordering::Acquire);
         let values = values();
+        let normalize = if NORMALIZE.load(Ordering::Acquire) { self.loudness_gain } else { 1.0 };
+        self.gain = 10f32.powf(values.preamp_db / 20.0) * normalize;
         self.bypass = values.is_flat();
         if self.bypass {
             return;
         }
 
-        self.preamp = 10f32.powf(values.preamp_db / 20.0);
         for channel in &mut self.filters {
             for (band, filter) in channel.iter_mut().enumerate() {
                 filter.retune(Biquad::peaking(BAND_HZ[band], self.sample_rate, values.bands_db[band]));
@@ -255,10 +278,10 @@ impl<S: Source> Iterator for EqualizedSource<S> {
         let channel = self.channel_index;
         self.channel_index = (self.channel_index + 1) % self.filters.len();
         if self.bypass {
-            return Some(sample);
+            return Some(sample * self.gain);
         }
 
-        let mut output = sample * self.preamp;
+        let mut output = sample * self.gain;
         for filter in &mut self.filters[channel] {
             output = filter.process(output);
         }
@@ -313,7 +336,9 @@ impl<S: Source> Source for EqualizedSource<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{flush_denormal, Biquad, EqualizerValues, BAND_COUNT, BAND_HZ, MAX_GAIN_DB};
+    use super::{
+        flush_denormal, loudness_gain, Biquad, EqualizerValues, BAND_COUNT, BAND_HZ, MAX_GAIN_DB,
+    };
 
     /// A value below the floor lands on exact zero; an audible one passes through untouched,
     /// regardless of sign.
@@ -395,6 +420,14 @@ mod tests {
         assert_eq!(above_nyquist.b0, 1.0);
         let passed = response_at(above_nyquist, 1_000.0, 8_000.0);
         assert!((passed - 1.0).abs() < 0.01, "a disabled band is unity gain, got {passed}");
+    }
+
+    #[test]
+    fn loudness_above_the_reference_is_turned_down_and_below_it_left_alone() {
+        assert!((loudness_gain(Some(6.0)) - 0.501).abs() < 0.001, "+6 dB loud halves amplitude");
+        assert_eq!(loudness_gain(Some(-4.0)), 1.0, "a quiet track is never boosted");
+        assert_eq!(loudness_gain(None), 1.0, "no measurement, no change");
+        assert_eq!(loudness_gain(Some(f32::NAN)), 1.0);
     }
 
     #[test]

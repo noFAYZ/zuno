@@ -4458,6 +4458,7 @@ async fn native_audio_load(
     source: NativeAudioSource,
     duration_sec: Option<f64>,
     standby: Option<bool>,
+    loudness_db: Option<f32>,
 ) -> Result<f64, CommandError> {
     let NativeAudioReader { reader, mime_type, buffer } =
         open_native_audio_reader(&app, &track_id, source, standby.unwrap_or(false))?;
@@ -4473,10 +4474,11 @@ async fn native_audio_load(
          * most of playback rather than an edge case.
          */
         if opus_source::is_opus(&mime_type) {
-            return opus_source::OpusSource::new(reader, &mime_type).map(equalized);
+            return opus_source::OpusSource::new(reader, &mime_type)
+                .map(|source| equalized(source, loudness_db));
         }
         rodio::Decoder::new(reader)
-            .map(equalized)
+            .map(|source| equalized(source, loudness_db))
             .map_err(|error| format!("audio decode failed: {error}"))
     })
     .await
@@ -4561,14 +4563,22 @@ async fn native_audio_load(
  * The duration is read *before* wrapping: it is what the caller reports back to the frontend,
  * and reading it through two adapters is one more place for it to go missing.
  */
-fn equalized<S>(source: S) -> (audio::BoxedSource, Option<f64>)
+fn equalized<S>(source: S, loudness_db: Option<f32>) -> (audio::BoxedSource, Option<f64>)
 where
     S: rodio::Source + Send + 'static,
 {
     use rodio::Source as _;
     let duration = source.total_duration().map(|value| value.as_secs_f64());
-    let shaped = equalizer::EqualizedSource::new(source).limit(rodio::source::LimitSettings::new());
+    let shaped = equalizer::EqualizedSource::new(source, loudness_db)
+        .limit(rodio::source::LimitSettings::new());
     (Box::new(shaped) as audio::BoxedSource, duration)
+}
+
+/// Volume normalisation from each track's measured loudness. Applies immediately, and never
+/// starts the audio thread.
+#[tauri::command]
+fn native_audio_set_normalization(enabled: bool) {
+    equalizer::set_normalize(enabled);
 }
 
 /// The ten band gains and the preamp, in dB. Applies to whatever is playing, immediately.
@@ -5072,6 +5082,7 @@ pub fn run() {
             native_audio_drop_standby,
             native_audio_drop_active,
             native_audio_set_equalizer,
+            native_audio_set_normalization,
             native_audio_list_output_devices,
             native_audio_set_output_device,
             media_server_release,
