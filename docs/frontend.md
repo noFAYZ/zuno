@@ -150,7 +150,7 @@ Tailwind classes inline; there are no `*.module.css` files.
 | `GoogleSignInButton.tsx` | The single sign-in button used everywhere. Previously three different-looking buttons for the same consequential action. |
 | `AuthOverlay.tsx` | Progress for sign-in and account-switch, driven by `LibraryState.authProgress`. The stages are listed per flow rather than filtered from one array — switching channel has no browser step, and rendering it as "skipped" would claim something that never happened. |
 | `NotificationsPanel.tsx` | Artist release feed with an unseen badge, refreshed on a slow interval — new releases arrive on the order of days. |
-| `DownloadsPanel.tsx` | Recent downloads (4) with progress and byte totals; the full list is the `downloads` browse surface. |
+| `DownloadsPanel.tsx` | Toolbar progress ring and count; the panel shows storage, the active download, up next, failures (retry or dismiss) and the 4 most recent saves. The full list is the `downloads` browse surface. |
 | `TagEditor.tsx` | Local-file tag editing via `local_audio_read_tags` / `local_audio_write_tags`. |
 | `ArtistLinks.tsx` | Renders `Track.artists[]` as individually clickable links through `ArtistNavigationProvider`; falls back to the plain artist string. |
 | `TrackArtwork.tsx` | Artwork with loading/fallback states, backed by `internal/artworkCache.ts` so remounts don't rewalk the candidate URLs. |
