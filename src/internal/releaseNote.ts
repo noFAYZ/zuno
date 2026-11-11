@@ -23,11 +23,11 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `**Offline** — downloads keep playing, artwork and all, with no connection, from a redesigned downloads menu.
-**Sound** — volume normalization, speed and pitch as separate controls, a new equaliser, and no pause between gapless tracks.
-**Library** — pin playlists to the sidebar, sort order that sticks, full-size covers and app zoom.
-**Mini player** — skins, scroll-wheel volume and a close menu.
-**Fixes** — songs playing sped up, Windows sign-in error 8, the Wayland crash on NVIDIA and a lagging Linux media widget. Native Windows ARM64 builds too.
+export const RELEASE_NOTE_BODY = `**Offline** — downloads play with their artwork and no connection, and Zuno starts offline with your library intact.
+**Sound** — volume normalization, separate speed and pitch, a draw-your-own equaliser, and gapless with no pause.
+**Mini player** — Cassette, Vinyl and Y2K skins.
+**Library** — pinned playlists, remembered sort order, full-size covers, app zoom and settings search.
+**Fixes** — sped-up songs, Windows sign-in error 8, the Wayland crash on NVIDIA and lyrics memory spikes. Windows on ARM gets native builds.
 
 Report anything broken on GitHub, or come say hello at /r/ZunoMusic.
 
