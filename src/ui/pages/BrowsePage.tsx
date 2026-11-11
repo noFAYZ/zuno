@@ -123,7 +123,7 @@ export function BrowsePage({
     return () => {
       cancelled = true;
     };
-  }, [isDownloads, libraryController, target]);
+  }, [isDownloads, libraryController, surface, target]);
 
   const playShelfTrack = (shelfTracks: Track[], track: Track) => {
     void playerController.playTrackById(track.id, shelfTracks);

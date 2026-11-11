@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent, type WheelEvent } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type MouseEvent, type WheelEvent } from "react";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
@@ -8,7 +8,7 @@ import {
 } from "../../settings/miniPlayer";
 import { useReduceMotion } from "../../settings/renderEffects";
 import { isLinux } from "../../platform";
-import { restoreMainWindow, useMiniPlayerBridge } from "./useMiniPlayerBridge";
+import { restoreMainWindow, showMiniPlayerCloseMenu, useMiniPlayerBridge } from "./useMiniPlayerBridge";
 import { SKIN_COMPONENTS } from "./skins";
 
 const win = getCurrentWindow();
@@ -54,23 +54,24 @@ export function SkinnedMiniPlayer({ skin }: { skin: Exclude<MiniPlayerSkinId, "c
    * Space, ←/→ and ↑/↓ work on any skin without each one wiring them up. A focused button or
    * slider keeps its own keys, so Space on the play key never toggles twice.
    */
+  const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (event.target instanceof Element && event.target.closest("input, button")) return;
+    const action = {
+      " ": () => void emit("mini-player:toggle-play-pause"),
+      ArrowLeft: () => seekBy(-SEEK_STEP_SEC),
+      ArrowRight: () => seekBy(SEEK_STEP_SEC),
+      ArrowUp: () => nudgeVolume(VOLUME_STEP),
+      ArrowDown: () => nudgeVolume(-VOLUME_STEP),
+    }[event.key];
+    if (!action) return;
+    event.preventDefault();
+    action();
+  });
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.target instanceof Element && event.target.closest("input, button")) return;
-      const action = {
-        " ": () => void emit("mini-player:toggle-play-pause"),
-        ArrowLeft: () => seekBy(-SEEK_STEP_SEC),
-        ArrowRight: () => seekBy(SEEK_STEP_SEC),
-        ArrowUp: () => nudgeVolume(VOLUME_STEP),
-        ArrowDown: () => nudgeVolume(-VOLUME_STEP),
-      }[event.key];
-      if (!action) return;
-      event.preventDefault();
-      action();
-    };
-    window.addEventListener("keydown", onKeyDown);
+    const listener = (event: KeyboardEvent) => onKeyDown(event);
+    window.addEventListener("keydown", listener);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", listener);
       window.clearTimeout(readoutTimerRef.current);
     };
   }, []);
@@ -111,7 +112,10 @@ export function SkinnedMiniPlayer({ skin }: { skin: Exclude<MiniPlayerSkinId, "c
       className="grid h-full w-full cursor-grab place-items-center bg-transparent active:cursor-grabbing"
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
-      onContextMenu={(event) => event.preventDefault()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        void showMiniPlayerCloseMenu();
+      }}
     >
       <Skin
         title={playerState.title}

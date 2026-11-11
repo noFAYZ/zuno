@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logInternalWarn } from "./logging";
 
-function getInvokeErrorMessage(error: unknown): string {
+/** `invoke` rejects with a plain `{ message }` object, not an `Error`. */
+export function getInvokeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "object" && error !== null) {
     const message = (error as { message?: unknown }).message;

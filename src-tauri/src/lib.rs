@@ -1,7 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-#[cfg(not(debug_assertions))]
-use portpicker::pick_unused_port;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -133,6 +131,10 @@ const YOUTUBE_COOKIE_ENCRYPTION_KEY_USER: &str = "youtube-music-cookie-encryptio
 #[cfg(target_os = "macos")]
 const YOUTUBE_COOKIE_ENCRYPTED_FILE: &str = "youtube-music-session-v1.bin";
 const YOUTUBE_LOGIN_WINDOW: &str = "youtube-music-login";
+/// The sign-in window holds two webviews: a read-only address bar on top and Google below.
+const YOUTUBE_LOGIN_ADDRESS_BAR: &str = "youtube-music-login-address";
+const YOUTUBE_LOGIN_PAGE: &str = "youtube-music-login-page";
+const YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT: f64 = 36.0;
 const YOUTUBE_LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
 /// Storage partition for the sign-in webview, so clearing it cannot touch the app's own.
 ///
@@ -148,10 +150,9 @@ const YOUTUBE_LOGIN_DATA_DIR: &str = "youtube-login-webview";
 const YOUTUBE_LOGIN_DATA_STORE_ID: [u8; 16] = [
     0x7a, 0x75, 0x6e, 0x6f, 0x6c, 0x6f, 0x67, 0x69, 0x6e, 0x77, 0x65, 0x62, 0x76, 0x69, 0x65, 0x77,
 ];
-const YOUTUBE_PLAYER_API_URL: &str = "https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
-const YOUTUBE_MUSIC_PLAYER_API_URL: &str = "https://music.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
 #[cfg(target_os = "macos")]
 const MACOS_LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
+const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 const YOUTUBE_COOKIE_CHUNK_SIZE: usize = 900;
 /// Bytes: `YOUTUBE_COOKIE_CHUNK_SIZE * YOUTUBE_COOKIE_MAX_CHUNKS` ~= 57.6 KB.
 ///
@@ -181,10 +182,14 @@ const YOUTUBE_SILENT_REFRESH_POLLS: u32 = 25;
 const DEFAULT_CACHE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const CURRENT_LOG_FILE_NAME: &str = "current.log";
 
-static APP_LOG_FILE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
+const PREVIOUS_LOG_FILE_NAME: &str = "previous.log";
+/// A days-long session in the tray must not grow the log without bound.
+const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
 
-struct CacheLock(Mutex<()>);
-struct AppSettingsLock(Mutex<()>);
+static APP_LOG_FILE: OnceLock<Mutex<Option<(File, u64)>>> = OnceLock::new();
+
+/// Guards the cache directory and carries its running byte total once known.
+struct CacheLock(Mutex<Option<u64>>);
 /// Serializes every read-modify-write of the YouTube account store — sign-in, silent refresh,
 /// switch, remove, and the ambient cookie-rotation persist inside `proxy_http_request` all go
 /// through it. Without this, two of those racing (e.g. a rotation persisting at the same moment
@@ -280,8 +285,11 @@ fn error_cause_chain(error: &dyn std::error::Error) -> String {
 }
 
 fn is_youtube_cookie_host(url: &url::Url) -> bool {
-    url.host_str()
-        .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
+    // HTTPS only: the jar holds Secure cookies, which must never travel in plaintext.
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
 }
 
 /// Whether this rotation may wait for `YOUTUBE_COOKIE_PERSIST_INTERVAL` before being stored.
@@ -504,8 +512,9 @@ fn refresh_youtube_cookie_jar(
                 None
             }
         };
-        match active_slot_id {
-            Some(slot_id) => match persist_account_cookie(app, account_lock, &slot_id, &merged) {
+        // No active slot (e.g. mid-removal in another window): the live jar still serves this session.
+        if let Some(slot_id) = active_slot_id {
+            match persist_account_cookie(app, account_lock, &slot_id, &merged) {
                 Ok(()) => eprintln!(
                     "[internal][tauri][info] youtube cookie rotated and persisted bytes={}",
                     merged.len()
@@ -514,10 +523,7 @@ fn refresh_youtube_cookie_jar(
                     "[internal][tauri][warn] youtube cookie persist failed: {}",
                     error.message
                 ),
-            },
-            // No active slot to persist against (e.g. mid-removal on another window); the live
-            // jar above still serves the rest of this session correctly.
-            None => {}
+            }
         }
     }
     Some(merged)
@@ -534,8 +540,6 @@ struct CacheSettings {
 struct CacheEntry {
     key: String,
     value: String,
-    updated_at_ms: u64,
-    last_accessed_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -577,22 +581,55 @@ fn cache_error(message: impl Into<String>) -> CommandError {
     }
 }
 
-// OS trust store, read once; bundled roots alone reject TLS-inspecting proxies/AV (#143).
-static NATIVE_ROOT_CERTS: LazyLock<Vec<reqwest::Certificate>> = LazyLock::new(|| {
-    rustls_native_certs::load_native_certs()
+/// Pooled clients (keep-alive, TLS resumption), one per local address family: default, IPv4, IPv6.
+static HTTP_CLIENTS: LazyLock<[reqwest::Client; 3]> = LazyLock::new(|| {
+    // OS trust store; bundled roots alone reject TLS-inspecting proxies/AV (#143). One cert
+    // rustls rejects would fail every build, hence the filter.
+    let roots: Vec<_> = rustls_native_certs::load_native_certs()
         .certs
         .into_iter()
-        // One cert rustls rejects would fail every client build.
         .filter(|cert| rustls::RootCertStore::empty().add(cert.clone()).is_ok())
         .filter_map(|cert| reqwest::Certificate::from_der(&cert).ok())
-        .collect()
+        .collect();
+    [None, Some(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), Some(IpAddr::V6(Ipv6Addr::UNSPECIFIED))].map(
+        |local| {
+            roots
+                .iter()
+                .cloned()
+                .fold(reqwest::Client::builder(), reqwest::ClientBuilder::add_root_certificate)
+                .local_address(local)
+                .connect_timeout(Duration::from_secs(15))
+                .read_timeout(Duration::from_secs(30))
+                .build()
+                .expect("HTTP client must build with the OS trust store")
+        },
+    )
 });
 
-pub(crate) fn http_client_builder() -> reqwest::ClientBuilder {
-    NATIVE_ROOT_CERTS
-        .iter()
-        .cloned()
-        .fold(reqwest::Client::builder(), reqwest::ClientBuilder::add_root_certificate)
+/// The shared client, bound to `family` when a signed googlevideo URL requires one.
+pub(crate) fn http_client(family: Option<IpAddr>) -> &'static reqwest::Client {
+    &HTTP_CLIENTS[match family {
+        None => 0,
+        Some(IpAddr::V4(_)) => 1,
+        Some(IpAddr::V6(_)) => 2,
+    }]
+}
+
+/// localStorage is keyed by origin, port included: a new port every launch silently wipes it.
+/// The fixed port keeps the origin stable; a random one is only the fallback when it is taken.
+#[cfg(not(debug_assertions))]
+fn ui_port() -> u16 {
+    const PREFERRED_UI_PORT: u16 = 47_731;
+    [PREFERRED_UI_PORT, 0]
+        .into_iter()
+        .find_map(|port| TcpListener::bind(("127.0.0.1", port)).ok()?.local_addr().ok())
+        .map(|address| address.port())
+        .inspect(|port| {
+            if *port != PREFERRED_UI_PORT {
+                eprintln!("[internal][tauri][warn] UI port {PREFERRED_UI_PORT} busy, using {port}; local storage starts empty");
+            }
+        })
+        .expect("no loopback port available for the UI")
 }
 
 fn signed_googlevideo_local_address(url: &url::Url) -> Option<IpAddr> {
@@ -720,7 +757,7 @@ fn local_audio_entry(path: &Path) -> LocalAudioFile {
  * happily embed whatever bytes it is handed under whatever mime type it is told — which
  * produces a file every other player renders as a broken cover.
  */
-#[tauri::command]
+#[tauri::command(async)]
 fn read_image_file(path: String) -> Result<LocalArtwork, CommandError> {
     use base64::Engine;
 
@@ -752,7 +789,7 @@ fn sniff_image_mime(data: &[u8]) -> Option<&'static str> {
 }
 
 /// The first embedded picture, for the one file the UI is about to show.
-#[tauri::command]
+#[tauri::command(async)]
 fn local_audio_artwork(path: String) -> Result<Option<LocalArtwork>, CommandError> {
     use base64::Engine;
     use lofty::file::TaggedFileExt;
@@ -808,7 +845,7 @@ fn scan_local_audio_path(path: &Path, files: &mut Vec<LocalAudioFile>) -> Result
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_audio_scan(paths: Vec<String>) -> Result<Vec<LocalAudioFile>, CommandError> {
     let mut files = Vec::new();
     for path in paths {
@@ -818,7 +855,7 @@ fn local_audio_scan(paths: Vec<String>) -> Result<Vec<LocalAudioFile>, CommandEr
         }
         scan_local_audio_path(Path::new(trimmed_path), &mut files)?;
     }
-    files.sort_by(|left, right| left.path.to_lowercase().cmp(&right.path.to_lowercase()));
+    files.sort_by_cached_key(|file| file.path.to_lowercase());
     files.dedup_by(|left, right| left.path == right.path);
     Ok(files)
 }
@@ -859,41 +896,88 @@ enum ArtworkEdit {
 /// Cover art is embedded in the file, so an unreasonable one bloats every copy of the song.
 const MAX_ARTWORK_BYTES: usize = 12 * 1024 * 1024;
 
-/// Reads real tags from a file.
-///
-/// The scanner falls back to the filename and parent folder, which is fine for a quick list
-/// but wrong often enough that an editor needs the actual values — otherwise "save" would
-/// write the guessed name back into the file as if it were the truth.
-/// Reads a user-chosen text file. Used for playlist import.
-///
-/// Size-capped: the picker lets someone choose any file at all, and reading a multi-gigabyte
-/// one into a string to discover it is not a playlist would take the app down with it.
-#[tauri::command]
-fn read_text_file(path: String) -> Result<String, CommandError> {
-    const MAX_IMPORT_BYTES: u64 = 16 * 1024 * 1024;
+#[derive(Deserialize)]
+struct TextFileFormat {
+    name: String,
+    extensions: Vec<String>,
+    contents: String,
+}
 
-    let path = PathBuf::from(path);
-    let metadata = fs::metadata(&path)
-        .map_err(|error| cache_error(format!("file read failed: {error}")))?;
-    if metadata.len() > MAX_IMPORT_BYTES {
+#[derive(Serialize)]
+struct SavedTextFile {
+    path: String,
+    /// Index into the formats offered, picked by the extension the user chose.
+    format: usize,
+}
+
+/// Save dialog and write in one step, so the renderer never names a path to write to.
+#[tauri::command]
+async fn export_text_file(
+    app: tauri::AppHandle,
+    title: String,
+    file_name: String,
+    formats: Vec<TextFileFormat>,
+) -> Result<Option<SavedTextFile>, CommandError> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dialog = app.dialog().file().set_title(title).set_file_name(file_name);
+    for format in &formats {
+        let extensions: Vec<&str> = format.extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(&format.name, &extensions);
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    dialog.save_file(move |path| {
+        let _ = sender.send(path);
+    });
+    let Some(path) = receiver.await.ok().flatten().and_then(|path| path.into_path().ok()) else {
+        return Ok(None);
+    };
+    let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or_default();
+    let format = formats
+        .iter()
+        .position(|format| format.extensions.iter().any(|candidate| candidate.eq_ignore_ascii_case(extension)))
+        .unwrap_or(0);
+    let contents = formats.get(format).map_or("", |format| format.contents.as_str());
+    fs::write(&path, contents).map_err(|error| cache_error(format!("file write failed: {error}")))?;
+    Ok(Some(SavedTextFile { path: path.display().to_string(), format }))
+}
+
+#[derive(Serialize)]
+struct OpenedTextFile {
+    path: String,
+    contents: String,
+}
+
+/// Open dialog and read in one step, size-capped: the user can pick any file at all.
+#[tauri::command]
+async fn import_text_file(
+    app: tauri::AppHandle,
+    title: String,
+    filter_name: String,
+    extensions: Vec<String>,
+) -> Result<Option<OpenedTextFile>, CommandError> {
+    use tauri_plugin_dialog::DialogExt;
+    const MAX_IMPORT_BYTES: u64 = 16 * 1024 * 1024;
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, &extensions)
+        .pick_file(move |path| {
+            let _ = sender.send(path);
+        });
+    let Some(path) = receiver.await.ok().flatten().and_then(|path| path.into_path().ok()) else {
+        return Ok(None);
+    };
+    if fs::metadata(&path).map_err(|error| cache_error(format!("file read failed: {error}")))?.len() > MAX_IMPORT_BYTES {
         return Err(cache_error("that file is too large to be a playlist"));
     }
-
-    fs::read_to_string(&path).map_err(|error| cache_error(format!("file read failed: {error}")))
+    let contents = fs::read_to_string(&path).map_err(|error| cache_error(format!("file read failed: {error}")))?;
+    Ok(Some(OpenedTextFile { path: path.display().to_string(), contents }))
 }
 
-/// Writes a user-chosen text file. Used for playlist export.
-#[tauri::command]
-fn write_text_file(path: String, contents: String) -> Result<(), CommandError> {
-    let path = PathBuf::from(path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| cache_error(format!("directory creation failed: {error}")))?;
-    }
-    fs::write(&path, contents).map_err(|error| cache_error(format!("file write failed: {error}")))
-}
-
-#[tauri::command]
+/// Real tags from the file: the scanner's filename guesses must not be saved back as truth.
+#[tauri::command(async)]
 fn local_audio_read_tags(path: String) -> Result<LocalAudioTags, CommandError> {
     use lofty::file::TaggedFileExt;
     use lofty::tag::Accessor;
@@ -926,7 +1010,7 @@ fn local_audio_read_tags(path: String) -> Result<LocalAudioTags, CommandError> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn local_audio_write_tags(path: String, tags: LocalAudioTags) -> Result<(), CommandError> {
     use lofty::config::WriteOptions;
     use lofty::file::{AudioFile, TaggedFileExt};
@@ -957,7 +1041,7 @@ fn local_audio_write_tags(path: String, tags: LocalAudioTags) -> Result<(), Comm
                 let _ = tag.insert_text(key, text.to_string());
             }
             None => {
-                let _ = tag.remove_key(key);
+                tag.remove_key(key);
             }
         }
     }
@@ -977,7 +1061,7 @@ fn local_audio_write_tags(path: String, tags: LocalAudioTags) -> Result<(), Comm
             let _ = tag.insert_text(ItemKey::Year, year.to_string());
         }
         None => {
-            let _ = tag.remove_key(ItemKey::Year);
+            tag.remove_key(ItemKey::Year);
         }
     }
 
@@ -1038,7 +1122,7 @@ struct LocalAudioWatcher(Mutex<Option<notify::RecommendedWatcher>>);
 /// Deliberately coarse: it emits one debounced "something changed" event rather than a diff.
 /// The scan is cheap, and a precise change feed would have to model renames, temp files and
 /// editors that write-then-replace — all of which produce the same user-visible outcome.
-#[tauri::command]
+#[tauri::command(async)]
 fn local_audio_watch(
     app: tauri::AppHandle,
     state: tauri::State<'_, LocalAudioWatcher>,
@@ -1100,31 +1184,14 @@ fn local_audio_watch(
     Ok(())
 }
 
-#[tauri::command]
-fn local_audio_unwatch(state: tauri::State<'_, LocalAudioWatcher>) -> Result<(), CommandError> {
-    let mut guard = state
-        .0
-        .lock()
-        .map_err(|_| cache_error("watcher lock unavailable"))?;
-    *guard = None;
-    Ok(())
-}
-
-#[tauri::command]
-fn local_audio_read(path: String) -> Result<AudioPayload, CommandError> {
+#[tauri::command(async)]
+fn local_audio_read(path: String) -> Result<tauri::ipc::Response, CommandError> {
     let path = PathBuf::from(path);
     if !path.is_file() || !is_local_audio_file(&path) {
-        return Err(CommandError {
-            message: "local audio file is unavailable.".to_string(),
-        });
+        return Err(cache_error("local audio file is unavailable."));
     }
-    let bytes = fs::read(&path).map_err(|error| CommandError {
-        message: format!("local audio read failed: {error}"),
-    })?;
-    Ok(AudioPayload {
-        body_base64: STANDARD.encode(bytes),
-        mime_type: local_audio_mime_type(&path).to_string(),
-    })
+    let bytes = fs::read(&path).map_err(|error| cache_error(format!("local audio read failed: {error}")))?;
+    framed_response(&serde_json::json!({ "mimeType": local_audio_mime_type(&path) }), &bytes)
 }
 
 fn cache_root(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
@@ -1142,13 +1209,6 @@ fn cache_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> 
     Ok(cache_root(app)?.join("settings.json"))
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
 fn cache_key_hash(key: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in key.as_bytes() {
@@ -1162,36 +1222,29 @@ fn cache_entry_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, Comman
     Ok(cache_entries_dir(app)?.join(format!("{:016x}.json", cache_key_hash(key))))
 }
 
-fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), CommandError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| cache_error(format!("cache directory creation failed: {error}")))?;
-    }
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| cache_error(format!("cache serialization failed: {error}")))?;
-    let temp_path = path.with_extension("tmp");
-    fs::write(&temp_path, bytes)
-        .map_err(|error| cache_error(format!("cache write failed: {error}")))?;
-    /*
-     * `rename` replaces the target on every platform, so the old file stays until the new one
-     * lands. Deleting it first meant a failed rename lost the whole settings file (#155).
-     *
-     * Retried because on Windows a virus scanner or the indexer often holds a just-written
-     * file for a moment, and the rename fails until it lets go.
-     */
+/// Renames `temp` over `path`; the old file stays until the new one lands (#155). Retried because a
+/// Windows scanner or the indexer often holds a just-written file for a moment.
+fn replace_file(temp: &Path, path: &Path) -> std::io::Result<()> {
     let mut attempts = 0;
     loop {
-        match fs::rename(&temp_path, path) {
-            Ok(()) => return Ok(()),
+        match fs::rename(temp, path) {
             Err(_) if attempts < 10 => {
                 attempts += 1;
                 thread::sleep(Duration::from_millis(50));
             }
-            Err(error) => {
-                return Err(cache_error(format!("cache finalize failed: {error}")));
-            }
+            result => return result,
         }
     }
+}
+
+fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), CommandError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| cache_error(format!("directory creation failed: {error}")))?;
+    }
+    let bytes = serde_json::to_vec(value).map_err(|error| cache_error(format!("serialization failed: {error}")))?;
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, bytes).map_err(|error| cache_error(format!("write failed: {error}")))?;
+    replace_file(&temp_path, path).map_err(|error| cache_error(format!("finalize failed: {error}")))
 }
 
 fn app_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
@@ -1203,67 +1256,88 @@ fn app_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
         })
 }
 
-fn read_app_settings(
+type SettingsMap = HashMap<String, serde_json::Value>;
+
+/// Durable settings, read from disk once and then served from memory.
+#[derive(Default)]
+struct AppSettings(Mutex<Option<SettingsMap>>);
+
+/// The settings file, falling back to `.bak` when it is missing, empty or corrupt.
+fn load_settings_file(path: &Path) -> SettingsMap {
+    for candidate in [path.to_path_buf(), path.with_extension("bak")] {
+        let Ok(bytes) = fs::read(&candidate) else { continue };
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        match serde_json::from_slice(&bytes) {
+            Ok(settings) => return settings,
+            Err(error) => eprintln!(
+                "[internal][tauri][error] settings unreadable path={} error={error}",
+                candidate.display()
+            ),
+        }
+    }
+    SettingsMap::new()
+}
+
+/// fsync, keep the previous file as `.bak`, then rename into place: a crash at any point
+/// leaves either the new file or the last good one.
+fn write_settings_file(path: &Path, settings: &SettingsMap) -> Result<(), CommandError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| cache_error(format!("directory creation failed: {error}")))?;
+    }
+    let temp_path = path.with_extension("tmp");
+    let write = || -> std::io::Result<()> {
+        let mut file = File::create(&temp_path)?;
+        serde_json::to_writer(&mut file, settings)?;
+        file.sync_all()
+    };
+    write().map_err(|error| cache_error(format!("settings write failed: {error}")))?;
+    // Copied, not moved, so the live file is never missing if the replace fails.
+    let _ = fs::copy(path, path.with_extension("bak"));
+    replace_file(&temp_path, path).map_err(|error| cache_error(format!("settings finalize failed: {error}")))
+}
+
+/// Runs `f` on the in-memory settings; returning `true` alongside the result persists them.
+fn with_settings<T>(
     app: &tauri::AppHandle,
-) -> Result<HashMap<String, serde_json::Value>, CommandError> {
+    f: impl FnOnce(&mut SettingsMap) -> (T, bool),
+) -> Result<T, CommandError> {
+    let state = app.state::<AppSettings>();
+    let mut guard = state.0.lock().map_err(|_| cache_error("application settings lock unavailable"))?;
     let path = app_settings_path(app)?;
-    if !path.exists() {
-        return Ok(HashMap::new());
+    let settings = guard.get_or_insert_with(|| load_settings_file(&path));
+    let (result, dirty) = f(settings);
+    if dirty {
+        write_settings_file(&path, settings)?;
     }
-
-    let bytes = fs::read(path).map_err(|error| CommandError {
-        message: format!("application settings read failed: {error}"),
-    })?;
-    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
-        return Ok(HashMap::new());
-    }
-    serde_json::from_slice(&bytes).map_err(|error| CommandError {
-        message: format!("application settings parse failed: {error}"),
-    })
+    Ok(result)
 }
 
-#[tauri::command]
-fn app_setting_get(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, AppSettingsLock>,
-    key: String,
-) -> Result<Option<serde_json::Value>, CommandError> {
-    let _guard = lock.0.lock().map_err(|_| CommandError {
-        message: "application settings lock unavailable".to_string(),
-    })?;
-    Ok(read_app_settings(&app)?.remove(&key))
+fn read_app_setting(app: &tauri::AppHandle, key: &str) -> Option<serde_json::Value> {
+    with_settings(app, |settings| (settings.get(key).cloned(), false)).ok().flatten()
 }
 
-#[tauri::command]
-fn app_setting_set(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, AppSettingsLock>,
-    key: String,
-    value: serde_json::Value,
-) -> Result<(), CommandError> {
-    let _guard = lock.0.lock().map_err(|_| CommandError {
-        message: "application settings lock unavailable".to_string(),
-    })?;
-    let mut settings = read_app_settings(&app)?;
+#[tauri::command(async)]
+fn app_setting_get(app: tauri::AppHandle, key: String) -> Option<serde_json::Value> {
+    read_app_setting(&app, &key)
+}
+
+#[tauri::command(async)]
+fn app_setting_set(app: tauri::AppHandle, key: String, value: serde_json::Value) -> Result<(), CommandError> {
     if key == MINIMIZE_TO_TRAY_SETTING {
         set_tray_visible(&app, value.as_bool().unwrap_or(false));
     }
-    settings.insert(key, value);
-    write_json_file(&app_settings_path(&app)?, &settings)
+    with_settings(&app, |settings| {
+        let changed = settings.get(&key) != Some(&value);
+        settings.insert(key, value);
+        ((), changed)
+    })
 }
 
-#[tauri::command]
-fn app_setting_remove(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, AppSettingsLock>,
-    key: String,
-) -> Result<(), CommandError> {
-    let _guard = lock.0.lock().map_err(|_| CommandError {
-        message: "application settings lock unavailable".to_string(),
-    })?;
-    let mut settings = read_app_settings(&app)?;
-    settings.remove(&key);
-    write_json_file(&app_settings_path(&app)?, &settings)
+#[tauri::command(async)]
+fn app_setting_remove(app: tauri::AppHandle, key: String) -> Result<(), CommandError> {
+    with_settings(&app, |settings| ((), settings.remove(&key).is_some()))
 }
 
 fn current_log_path(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
@@ -1285,18 +1359,8 @@ fn initialize_app_log(app: &tauri::AppHandle) -> Result<(), CommandError> {
         message: format!("log directory creation failed: {error}"),
     })?;
 
-    if let Ok(entries) = fs::read_dir(log_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path != log_path
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
-            {
-                let _ = fs::remove_file(path);
-            }
-        }
-    }
+    // The last session's log survives one relaunch: that is the one a crash report needs.
+    let _ = fs::rename(&log_path, log_path.with_file_name(PREVIOUS_LOG_FILE_NAME));
 
     let file = OpenOptions::new()
         .create(true)
@@ -1309,7 +1373,7 @@ fn initialize_app_log(app: &tauri::AppHandle) -> Result<(), CommandError> {
 
     let log_file = APP_LOG_FILE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = log_file.lock() {
-        *guard = Some(file);
+        *guard = Some((file, 0));
     }
 
     append_log_line(format_args!(
@@ -1326,10 +1390,27 @@ pub(crate) fn append_log_line(args: fmt::Arguments<'_>) {
     let Ok(mut guard) = log_file.lock() else {
         return;
     };
-    let Some(file) = guard.as_mut() else {
+    let Some((file, written)) = guard.as_mut() else {
         return;
     };
-    let _ = writeln!(file, "{args}");
+    if *written >= MAX_LOG_BYTES {
+        return;
+    }
+    let line = format!("{args}\n");
+    *written += line.len() as u64;
+    let _ = file.write_all(line.as_bytes());
+    if *written >= MAX_LOG_BYTES {
+        let _ = file.write_all(b"[internal][tauri][warn] log size cap reached; further lines dropped\n");
+    }
+}
+
+/// Panics go to the log as well as stderr: a release build on Windows has no console.
+fn install_panic_logger() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        append_log_line(format_args!("[internal][tauri][error] panic: {info}"));
+        default_hook(info);
+    }));
 }
 
 pub(crate) fn sanitize_log_message(message: &str) -> String {
@@ -1417,7 +1498,7 @@ fn sanitize_log_url(value: &str) -> String {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_current_log(app: tauri::AppHandle) -> Result<(), CommandError> {
     let log_path = current_log_path(&app)?;
     if !log_path.exists() {
@@ -1428,199 +1509,137 @@ fn open_current_log(app: tauri::AppHandle) -> Result<(), CommandError> {
     })
 }
 
-#[tauri::command]
-fn app_settings_clear(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, AppSettingsLock>,
-) -> Result<(), CommandError> {
-    let _guard = lock.0.lock().map_err(|_| CommandError {
-        message: "application settings lock unavailable".to_string(),
-    })?;
-    let path = app_settings_path(&app)?;
-    if path.exists() {
-        fs::remove_file(path).map_err(|error| CommandError {
-            message: format!("application settings clear failed: {error}"),
-        })?;
-    }
-    Ok(())
+#[tauri::command(async)]
+fn app_settings_clear(app: tauri::AppHandle) -> Result<(), CommandError> {
+    with_settings(&app, |settings| {
+        let had_any = !settings.is_empty();
+        settings.clear();
+        ((), had_any)
+    })
 }
 
-fn read_cache_settings(app: &tauri::AppHandle) -> Result<CacheSettings, CommandError> {
-    let path = cache_settings_path(app)?;
-    if !path.exists() {
-        return Ok(CacheSettings {
-            max_bytes: DEFAULT_CACHE_MAX_BYTES,
-        });
-    }
-    let bytes = fs::read(path)
-        .map_err(|error| cache_error(format!("cache settings read failed: {error}")))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| cache_error(format!("cache settings parse failed: {error}")))
+fn read_cache_max_bytes(app: &tauri::AppHandle) -> u64 {
+    cache_settings_path(app)
+        .ok()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<CacheSettings>(&bytes).ok())
+        .map_or(DEFAULT_CACHE_MAX_BYTES, |settings| settings.max_bytes)
 }
 
-fn cache_files(app: &tauri::AppHandle) -> Result<Vec<PathBuf>, CommandError> {
-    let directory = cache_entries_dir(app)?;
-    if !directory.exists() {
-        return Ok(Vec::new());
-    }
-    let files = fs::read_dir(directory)
-        .map_err(|error| cache_error(format!("cache directory read failed: {error}")))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "json")
+/// `(modified, size, path)` per entry. `cache_get` touches mtime, so oldest = least recently used.
+fn cache_files(directory: &Path) -> Vec<(SystemTime, u64, PathBuf)> {
+    let Ok(entries) = fs::read_dir(directory) else { return Vec::new() };
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension()? != "json" {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            Some((metadata.modified().ok()?, metadata.len(), path))
         })
-        .collect::<Vec<_>>();
-    Ok(files)
-}
-
-fn read_cache_entry(path: &Path) -> Result<CacheEntry, CommandError> {
-    let bytes =
-        fs::read(path).map_err(|error| cache_error(format!("cache entry read failed: {error}")))?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| cache_error(format!("cache entry parse failed: {error}")))
+        .collect()
 }
 
 fn calculate_cache_stats(app: &tauri::AppHandle) -> Result<CacheStats, CommandError> {
-    let files = cache_files(app)?;
-    let used_bytes = files
-        .iter()
-        .filter_map(|path| fs::metadata(path).ok().map(|metadata| metadata.len()))
-        .sum();
+    let files = cache_files(&cache_entries_dir(app)?);
     Ok(CacheStats {
-        max_bytes: read_cache_settings(app)?.max_bytes,
-        used_bytes,
+        max_bytes: read_cache_max_bytes(app),
+        used_bytes: files.iter().map(|(_, size, _)| size).sum(),
         entry_count: files.len(),
     })
 }
 
-fn enforce_cache_limit(app: &tauri::AppHandle) -> Result<(), CommandError> {
-    let max_bytes = read_cache_settings(app)?.max_bytes;
-    let mut entries = cache_files(app)?
-        .into_iter()
-        .filter_map(|path| {
-            let size = fs::metadata(&path).ok()?.len();
-            let last_accessed_ms = read_cache_entry(&path).ok()?.last_accessed_ms;
-            Some((path, size, last_accessed_ms))
-        })
-        .collect::<Vec<_>>();
-    let mut used_bytes = entries.iter().map(|(_, size, _)| *size).sum::<u64>();
-    entries.sort_by_key(|(_, _, last_accessed_ms)| *last_accessed_ms);
-
-    for (path, size, _) in entries {
-        if used_bytes <= max_bytes {
+/// Evicts least-recently-used entries down to 90% of the cap, from metadata alone; returns the
+/// bytes left. The headroom stops a cache sitting at its cap from evicting on every write.
+fn enforce_cache_limit(directory: &Path, max_bytes: u64) -> u64 {
+    let mut entries = cache_files(directory);
+    let mut used_bytes = entries.iter().map(|(_, size, _)| size).sum::<u64>();
+    if used_bytes <= max_bytes {
+        return used_bytes;
+    }
+    entries.sort_unstable_by_key(|(modified, _, _)| *modified);
+    for (_, size, path) in entries {
+        if used_bytes <= max_bytes / 10 * 9 {
             break;
         }
         if fs::remove_file(path).is_ok() {
-            used_bytes = used_bytes.saturating_sub(size);
+            used_bytes -= size;
         }
     }
-    Ok(())
+    used_bytes
 }
 
-#[tauri::command]
-fn cache_get(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, CacheLock>,
-    key: String,
-) -> Result<Option<String>, CommandError> {
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| cache_error("cache lock unavailable"))?;
+fn read_cache_entry(path: &Path) -> Option<CacheEntry> {
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+#[tauri::command(async)]
+fn cache_get(app: tauri::AppHandle, lock: tauri::State<'_, CacheLock>, key: String) -> Result<Option<String>, CommandError> {
+    let _guard = lock.0.lock().map_err(|_| cache_error("cache lock unavailable"))?;
     let path = cache_entry_path(&app, &key)?;
-    if !path.exists() {
+    let Some(entry) = read_cache_entry(&path).filter(|entry| entry.key == key) else {
         return Ok(None);
-    }
-    let mut entry = match read_cache_entry(&path) {
-        Ok(entry) if entry.key == key => entry,
-        Ok(_) => return Ok(None),
-        Err(_) => {
-            let _ = fs::remove_file(path);
-            return Ok(None);
-        }
     };
-    entry.last_accessed_ms = now_ms();
-    let value = entry.value.clone();
-    write_json_file(&path, &entry)?;
-    Ok(Some(value))
+    touch(&path);
+    Ok(Some(entry.value))
 }
 
-#[tauri::command]
+/// Recency lives in mtime, so marking an entry used costs no rewrite.
+fn touch(path: &Path) {
+    if let Ok(file) = File::options().write(true).open(path) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+#[tauri::command(async)]
 fn cache_set(
     app: tauri::AppHandle,
     lock: tauri::State<'_, CacheLock>,
     key: String,
     value: String,
 ) -> Result<CacheWriteResult, CommandError> {
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| cache_error("cache lock unavailable"))?;
+    let mut used_bytes = lock.0.lock().map_err(|_| cache_error("cache lock unavailable"))?;
     let path = cache_entry_path(&app, &key)?;
-    let existing = if path.exists() {
-        read_cache_entry(&path)
-            .ok()
-            .filter(|entry| entry.key == key)
-    } else {
-        None
+    if read_cache_entry(&path).is_some_and(|entry| entry.key == key && entry.value == value) {
+        touch(&path);
+        return Ok(CacheWriteResult { changed: false });
+    }
+    let size = |path: &Path| fs::metadata(path).map_or(0, |metadata| metadata.len());
+    let previous = size(&path);
+    write_json_file(&path, &CacheEntry { key, value })?;
+    let max_bytes = read_cache_max_bytes(&app);
+    // Seeded from disk once; after that each write only adjusts the running total.
+    let total = match *used_bytes {
+        Some(total) => total.saturating_sub(previous) + size(&path),
+        None => enforce_cache_limit(&cache_entries_dir(&app)?, max_bytes),
     };
-    let changed = existing.as_ref().map_or(true, |entry| entry.value != value);
-    let timestamp = now_ms();
-    let entry = CacheEntry {
-        key,
-        value,
-        updated_at_ms: if changed {
-            timestamp
-        } else {
-            existing
-                .as_ref()
-                .map(|entry| entry.updated_at_ms)
-                .unwrap_or(timestamp)
-        },
-        last_accessed_ms: timestamp,
-    };
-    write_json_file(&path, &entry)?;
-    enforce_cache_limit(&app)?;
-    Ok(CacheWriteResult { changed })
+    *used_bytes = Some(if total > max_bytes { enforce_cache_limit(&cache_entries_dir(&app)?, max_bytes) } else { total });
+    Ok(CacheWriteResult { changed: true })
 }
 
-#[tauri::command]
-fn cache_stats(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, CacheLock>,
-) -> Result<CacheStats, CommandError> {
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| cache_error("cache lock unavailable"))?;
+#[tauri::command(async)]
+fn cache_stats(app: tauri::AppHandle) -> Result<CacheStats, CommandError> {
     calculate_cache_stats(&app)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn cache_set_max_bytes(
     app: tauri::AppHandle,
     lock: tauri::State<'_, CacheLock>,
     max_bytes: u64,
 ) -> Result<CacheStats, CommandError> {
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| cache_error("cache lock unavailable"))?;
+    let mut used_bytes = lock.0.lock().map_err(|_| cache_error("cache lock unavailable"))?;
     write_json_file(&cache_settings_path(&app)?, &CacheSettings { max_bytes })?;
-    enforce_cache_limit(&app)?;
+    *used_bytes = Some(enforce_cache_limit(&cache_entries_dir(&app)?, max_bytes));
     calculate_cache_stats(&app)
 }
 
-#[tauri::command]
-fn cache_clear(
-    app: tauri::AppHandle,
-    lock: tauri::State<'_, CacheLock>,
-) -> Result<CacheStats, CommandError> {
-    let _guard = lock
-        .0
-        .lock()
-        .map_err(|_| cache_error("cache lock unavailable"))?;
+#[tauri::command(async)]
+fn cache_clear(app: tauri::AppHandle, lock: tauri::State<'_, CacheLock>) -> Result<CacheStats, CommandError> {
+    let mut used_bytes = lock.0.lock().map_err(|_| cache_error("cache lock unavailable"))?;
+    *used_bytes = Some(0);
     let entries = cache_entries_dir(&app)?;
     if entries.exists() {
         fs::remove_dir_all(&entries)
@@ -1631,24 +1650,44 @@ fn cache_clear(
     calculate_cache_stats(&app)
 }
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
 /// Key written by the frontend's durable settings layer. Read here rather than pushed from
 /// JS so the close handler answers correctly even before the webview has finished booting.
 const MINIMIZE_TO_TRAY_SETTING: &str = "minimize-to-tray";
 
 fn minimize_to_tray_enabled(app: &tauri::AppHandle) -> bool {
-    read_app_settings(app)
-        .ok()
-        .and_then(|settings| settings.get(MINIMIZE_TO_TRAY_SETTING).and_then(|v| v.as_bool()))
+    read_app_setting(app, MINIMIZE_TO_TRAY_SETTING)
+        .and_then(|value| value.as_bool())
         .unwrap_or(false)
 }
 
+/// Lets WebView2 trim the renderer's memory while the main window is out of sight. Audio is in
+/// Rust, so nothing audible depends on the renderer staying warm.
+#[cfg(windows)]
+fn set_webview_memory_low(window: &tauri::WebviewWindow, low: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+    let level = if low {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    } else {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+    };
+    let _ = window.with_webview(move |webview| unsafe {
+        // Older runtimes lack ICoreWebView2_19; they simply keep the default level.
+        if let Ok(core) = webview.controller().CoreWebView2().and_then(|core| core.cast::<ICoreWebView2_19>()) {
+            let _ = core.SetMemoryUsageTargetLevel(level);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn set_webview_memory_low(_window: &tauri::WebviewWindow, _low: bool) {}
+
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        set_webview_memory_low(&window, false);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -1664,6 +1703,7 @@ fn close_or_hide_main_window(app: &tauri::AppHandle) {
     if minimize_to_tray_enabled(app) {
         if let Some(window) = app.get_webview_window("main") {
             let _ = window.hide();
+            set_webview_memory_low(&window, true);
         }
         eprintln!("[internal][tauri][info] main window hidden to tray");
         return;
@@ -1719,7 +1759,7 @@ fn quit_app(app: tauri::AppHandle) {
     close_or_hide_main_window(&app);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn frontend_log(level: String, context: String, payload: String) {
     eprintln!("[internal][frontend][{}] {} {}", level, context, payload);
 }
@@ -2145,7 +2185,7 @@ fn remove_account_slot(
     Ok(new_active_cookie)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn load_youtube_music_cookie(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
@@ -2174,7 +2214,7 @@ struct YoutubeAccountSummary {
     is_active: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_youtube_music_accounts(
     app: tauri::AppHandle,
     account_lock: tauri::State<'_, AccountStoreLock>,
@@ -2241,7 +2281,7 @@ async fn remove_youtube_music_account(
 /// Labels a stored account for the switcher UI. Best-effort from the caller's point of view —
 /// Rust has no notion of "display name", it only stores whatever the frontend already fetched
 /// from YouTube for that account.
-#[tauri::command]
+#[tauri::command(async)]
 fn update_youtube_music_account_profile(
     app: tauri::AppHandle,
     account_lock: tauri::State<'_, AccountStoreLock>,
@@ -2261,7 +2301,6 @@ fn update_youtube_music_account_profile(
     save_account_store(&app, &store)
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn cookie_domain_matches(host: &str, cookie_domain: Option<&str>) -> bool {
     let Some(cookie_domain) = cookie_domain else {
         return false;
@@ -2333,6 +2372,11 @@ fn decode_slot_id_bytes(slot_id: &str) -> [u8; 16] {
 /// clean login/account-chooser screen, and a silent refresh against a specific slot's partition
 /// can only ever renew *that* account's session, never a different stored one.
 ///
+/// The window also shows a read-only address bar above the page, as a browser would, so users
+/// can check that they are typing their password into accounts.google.com and not a lookalike.
+/// It is a separate webview with no IPC access, and only this function writes to it, so the
+/// page being shown cannot fake it.
+///
 /// `loaded` is raised once a navigation finishes, which the silent refresh needs: cookies read
 /// before the page has actually loaded are the same stale ones we already hold.
 fn build_login_window(
@@ -2340,24 +2384,47 @@ fn build_login_window(
     visible: bool,
     loaded: Arc<AtomicBool>,
     slot_id: &str,
-) -> Result<tauri::WebviewWindow, CommandError> {
-    if let Some(existing) = app.get_webview_window(YOUTUBE_LOGIN_WINDOW) {
+) -> Result<tauri::Webview, CommandError> {
+    if let Some(existing) = app.get_window(YOUTUBE_LOGIN_WINDOW) {
         let _ = existing.close();
     }
+
+    let build_error = |error: tauri::Error| CommandError {
+        message: format!("unable to open YouTube Music sign-in: {error}"),
+    };
+    let (width, height) = (520.0, 760.0);
+    let window = tauri::window::WindowBuilder::new(app, YOUTUBE_LOGIN_WINDOW)
+        .title("Sign in to YouTube Music")
+        .visible(visible)
+        .skip_taskbar(!visible)
+        .inner_size(width, height)
+        .build()
+        .map_err(build_error)?;
+
+    window
+        .add_child(
+            tauri::webview::WebviewBuilder::new(
+                YOUTUBE_LOGIN_ADDRESS_BAR,
+                tauri::WebviewUrl::App("login-bar.html".into()),
+            ),
+            tauri::LogicalPosition::new(0.0, 0.0),
+            tauri::LogicalSize::new(width, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+        )
+        .map_err(build_error)?;
 
     let blank_url = "about:blank".parse().map_err(|error| CommandError {
         message: format!("invalid blank login URL: {error}"),
     })?;
-    let window_builder = tauri::WebviewWindowBuilder::new(
-        app,
-        YOUTUBE_LOGIN_WINDOW,
+    let page_builder = tauri::webview::WebviewBuilder::new(
+        YOUTUBE_LOGIN_PAGE,
         tauri::WebviewUrl::External(blank_url),
     )
-    .title("Sign in to YouTube Music")
-    .visible(visible)
-    .skip_taskbar(!visible)
-    .inner_size(520.0, 760.0)
-    .on_page_load(move |_window, payload| {
+    .on_page_load(move |page, payload| {
+        // Both events, so the bar already shows the new address while a slow page loads.
+        if let Some(address_bar) = page.get_webview(YOUTUBE_LOGIN_ADDRESS_BAR) {
+            let url = serde_json::Value::from(payload.url().as_str());
+            let _ = address_bar.eval(format!("window.showUrl?.({url})"));
+        }
         if payload.event() == tauri::webview::PageLoadEvent::Finished {
             loaded.store(true, Ordering::Relaxed);
         }
@@ -2365,7 +2432,7 @@ fn build_login_window(
     // See YOUTUBE_LOGIN_DATA_DIR: without its own partition, clearing this window's data
     // clears the main window's storage too.
     #[cfg(not(target_os = "macos"))]
-    let window_builder = window_builder.data_directory(
+    let page_builder = page_builder.data_directory(
         app.path()
             .app_local_data_dir()
             .map_err(|error| CommandError {
@@ -2374,14 +2441,57 @@ fn build_login_window(
             .join(login_partition_directory_name(slot_id)),
     );
     #[cfg(target_os = "macos")]
-    let window_builder = window_builder
+    let page_builder = page_builder
         .user_agent(MACOS_LOGIN_USER_AGENT)
         // macOS 14+ only; older versions fall back to the shared store, as they did before.
         .data_store_identifier(login_partition_store_id(slot_id));
 
-    window_builder.build().map_err(|error| CommandError {
-        message: format!("unable to open YouTube Music sign-in: {error}"),
-    })
+    let page = window
+        .add_child(
+            page_builder,
+            tauri::LogicalPosition::new(0.0, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+            tauri::LogicalSize::new(width, height - YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT),
+        )
+        .map_err(build_error)?;
+
+    // On Linux the child webviews are packed into the window's GTK box, which ignores their
+    // bounds and gives each the same share of the height. Pin the bar to its own height there
+    // and let the page take the rest; GTK keeps that layout through resizes by itself.
+    #[cfg(target_os = "linux")]
+    {
+        let gtk_window = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            use gtk::prelude::*;
+            let Ok(vbox) = gtk_window.default_vbox() else { return };
+            if let Some(bar) = vbox.children().first() {
+                bar.set_size_request(-1, YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT as i32);
+                bar.set_vexpand(false);
+                vbox.set_child_packing(bar, false, true, 0, gtk::PackType::Start);
+            }
+        });
+    }
+
+    // Elsewhere child webviews keep their bounds when the window is resized, so lay them out
+    // again: the bar keeps its height and the page takes the rest.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let content = page.clone();
+        window.on_window_event(move |event| {
+            let tauri::WindowEvent::Resized(size) = event else { return };
+            let Some(bar) = content.get_webview(YOUTUBE_LOGIN_ADDRESS_BAR) else { return };
+            let bar_height = (YOUTUBE_LOGIN_ADDRESS_BAR_HEIGHT * bar.window().scale_factor().unwrap_or(1.0)) as u32;
+            let _ = bar.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, 0).into(),
+                size: tauri::PhysicalSize::new(size.width, bar_height).into(),
+            });
+            let _ = content.set_bounds(tauri::Rect {
+                position: tauri::PhysicalPosition::new(0, bar_height).into(),
+                size: tauri::PhysicalSize::new(size.width, size.height.saturating_sub(bar_height)).into(),
+            });
+        });
+    }
+
+    Ok(page)
 }
 
 /// Clears a stored account's own webview partition, e.g. when it is removed or when an
@@ -2397,21 +2507,22 @@ fn remove_login_partition(app: &tauri::AppHandle, slot_id: &str) {
     if slot_id == LEGACY_ACCOUNT_SLOT_ID {
         return;
     }
-    let Ok(window) = build_login_window(app, false, Arc::new(AtomicBool::new(false)), slot_id) else {
+    let Ok(page) = build_login_window(app, false, Arc::new(AtomicBool::new(false)), slot_id) else {
         return;
     };
-    let _ = window.clear_all_browsing_data();
+    let _ = page.clear_all_browsing_data();
     // The clear is asynchronous underneath and reports through a handler nobody waits on;
     // closing the webview out from under it can leave the partition half-cleared.
     thread::sleep(Duration::from_millis(750));
-    let _ = window.close();
+    let _ = page.window().close();
 }
 
 /// The session cookie as the login webview currently holds it, if it holds one at all.
 fn harvest_session_cookie(
-    window: &tauri::WebviewWindow,
+    window: &tauri::Webview,
 ) -> Result<Option<String>, CommandError> {
-    #[cfg(target_os = "macos")]
+    // Not `cookies_for_url`: Tauri holds the webview's lock until the main thread replies, and a
+    // focus change handled while WebView2 fetches the cookies needs that lock, so it deadlocked.
     let cookies = window
         .cookies()
         .map_err(|error| CommandError {
@@ -2420,19 +2531,6 @@ fn harvest_session_cookie(
         .into_iter()
         .filter(|cookie| cookie_domain_matches("music.youtube.com", cookie.domain()))
         .collect::<Vec<_>>();
-    #[cfg(not(target_os = "macos"))]
-    let cookies = {
-        let cookie_url: url::Url = "https://music.youtube.com/"
-            .parse()
-            .map_err(|error| CommandError {
-                message: format!("invalid YouTube Music cookie URL: {error}"),
-            })?;
-        window
-            .cookies_for_url(cookie_url)
-            .map_err(|error| CommandError {
-                message: format!("unable to read YouTube Music session: {error}"),
-            })?
-    };
 
     let cookie_names = cookies
         .iter()
@@ -2498,7 +2596,7 @@ async fn sign_in_youtube_music(
     let result = poll_for_sign_in(&app, &jar, &account_lock, &window, &candidate_slot_id);
     // Any failure (cancel, timeout, keyring error) must not leave the window up or the partition behind (#144).
     if result.is_err() {
-        let _ = window.close();
+        let _ = window.window().close();
         remove_login_partition(&app, &candidate_slot_id);
     }
     result
@@ -2508,7 +2606,7 @@ fn poll_for_sign_in(
     app: &tauri::AppHandle,
     jar: &YoutubeCookieJar,
     account_lock: &AccountStoreLock,
-    window: &tauri::WebviewWindow,
+    window: &tauri::Webview,
     candidate_slot_id: &str,
 ) -> Result<SignInResult, CommandError> {
     let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
@@ -2522,7 +2620,7 @@ fn poll_for_sign_in(
     for poll in 1..=300 {
         let harvested = match harvest_session_cookie(window) {
             // Closing the window mid-read fails the read on macOS; that is still a cancel (#143).
-            Err(_) if app.get_webview_window(YOUTUBE_LOGIN_WINDOW).is_none() => None,
+            Err(_) if app.get_window(YOUTUBE_LOGIN_WINDOW).is_none() => None,
             other => other?,
         };
         if let Some(cookie_header) = harvested {
@@ -2551,7 +2649,7 @@ fn poll_for_sign_in(
                 account_changed,
                 slot_id,
             );
-            let _ = window.close();
+            let _ = window.window().close();
             return Ok(SignInResult {
                 cookie: cookie_header,
                 account_changed,
@@ -2559,7 +2657,7 @@ fn poll_for_sign_in(
             });
         }
 
-        if app.get_webview_window(YOUTUBE_LOGIN_WINDOW).is_none() {
+        if app.get_window(YOUTUBE_LOGIN_WINDOW).is_none() {
             eprintln!(
                 "[internal][tauri][warn] sign_in_youtube_music cancelled poll={}",
                 poll
@@ -2642,7 +2740,7 @@ async fn refresh_youtube_music_cookie(
         eprintln!("[internal][tauri][info] refresh_youtube_music_cookie found no usable session");
         Ok(None)
     })();
-    let _ = window.close();
+    let _ = window.window().close();
     result
 }
 
@@ -2682,16 +2780,9 @@ async fn delete_youtube_music_cookie(
     Ok(new_active_cookie)
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct CommandError {
     message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AudioPayload {
-    body_base64: String,
-    mime_type: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -2707,7 +2798,6 @@ struct ProxyHttpRequestInput {
 struct ProxyHttpResponse {
     status: u16,
     headers: HashMap<String, String>,
-    body_base64: String,
     /// The rotated cookie, when this response changed it. Absent means "unchanged".
     #[serde(skip_serializing_if = "Option::is_none")]
     cookie: Option<String>,
@@ -2764,25 +2854,33 @@ impl MediaBuffer {
         }
     }
 
-    /// Copies `start..=end` out of the chunk list, which may straddle several chunks.
-    pub(crate) fn read(&self, start: usize, end: usize) -> Vec<u8> {
-        let mut out = Vec::with_capacity(end.saturating_sub(start) + 1);
-        let mut offset = 0;
-        for chunk in &self.chunks {
-            let Some(bytes) = chunk else { break };
+    /// Copies from `start` straight into `out`, across chunk boundaries; returns bytes copied.
+    pub(crate) fn read_into(&self, start: usize, out: &mut [u8]) -> usize {
+        let (mut copied, mut offset) = (0, 0);
+        for bytes in self.chunks.iter().map_while(Option::as_ref) {
             let chunk_end = offset + bytes.len();
-            if chunk_end > start && offset <= end {
-                let from = start.saturating_sub(offset);
-                let to = (end - offset + 1).min(bytes.len());
-                if from < to {
-                    out.extend_from_slice(&bytes[from..to]);
+            let position = start + copied;
+            if position >= offset && position < chunk_end {
+                let count = (chunk_end - position).min(out.len() - copied);
+                out[copied..copied + count].copy_from_slice(&bytes[position - offset..][..count]);
+                copied += count;
+                if copied == out.len() {
+                    break;
                 }
             }
             offset = chunk_end;
-            if offset > end {
-                break;
-            }
         }
+        copied
+    }
+
+    /// `start..=end` as an owned copy, for callers that keep the bytes.
+    pub(crate) fn read(&self, start: usize, end: usize) -> Vec<u8> {
+        if end < start {
+            return Vec::new();
+        }
+        let mut out = vec![0; end - start + 1];
+        let copied = self.read_into(start, &mut out);
+        out.truncate(copied);
         out
     }
 }
@@ -2882,28 +2980,6 @@ fn store_media_buffer(
     Ok(())
 }
 
-fn collect_json_renderer_counts(value: &serde_json::Value, counts: &mut HashMap<String, usize>) {
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, child) in object {
-                if key.ends_with("Renderer")
-                    || key.ends_with("Continuation")
-                    || key.ends_with("Command")
-                {
-                    *counts.entry(key.clone()).or_default() += 1;
-                }
-                collect_json_renderer_counts(child, counts);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                collect_json_renderer_counts(item, counts);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn media_server() -> Result<&'static MediaServer, CommandError> {
     if let Some(server) = MEDIA_SERVER.get() {
         return Ok(server);
@@ -2957,7 +3033,7 @@ fn media_server() -> Result<&'static MediaServer, CommandError> {
  * Returns how many entries were dropped. Zero is the ordinary answer: in `rust` mode from a
  * cold start `media_server()` is never called, so there is nothing to release.
  */
-#[tauri::command]
+#[tauri::command(async)]
 fn media_server_release() -> Result<usize, CommandError> {
     let Some(server) = MEDIA_SERVER.get() else {
         return Ok(0);
@@ -3120,7 +3196,6 @@ fn parse_media_range(range_header: Option<&str>, total_len: usize) -> Option<(&'
     (start <= end && start < total_len).then_some(("206 Partial Content", start, end))
 }
 
-#[tauri::command]
 async fn fetch_audio_bytes(
     url: String,
     track_id: String,
@@ -3134,17 +3209,7 @@ async fn fetch_audio_bytes(
     let request_url = url::Url::parse(&url).map_err(|error| CommandError {
         message: format!("audio URL parse failed: {error}"),
     })?;
-    let mut client_builder = http_client_builder();
-    if let Some(local_address) = signed_googlevideo_local_address(&request_url) {
-        eprintln!(
-            "[internal][tauri][info] fetch_audio_bytes forcing signed IP family family={}",
-            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
-        );
-        client_builder = client_builder.local_address(local_address);
-    }
-    let client = client_builder.build().map_err(|error| CommandError {
-        message: format!("audio HTTP client creation failed: {error}"),
-    })?;
+    let client = http_client(signed_googlevideo_local_address(&request_url));
     /*
      * The whole file in one request, asked for the way the browser asks: `range=0-{clen-1}` in
      * the query string. When `clen` is absent there is nothing to bound the request with, so it
@@ -3154,7 +3219,7 @@ async fn fetch_audio_bytes(
         Some(total) if total > 0 => audio_url_with_range(&url, 0, total - 1),
         _ => url.clone(),
     };
-    let response = send_audio_request(&client, &ranged_url, cookie.as_deref(), &track_id).await?;
+    let response = send_audio_request(client, &ranged_url, cookie.as_deref(), &track_id).await?;
 
     let body = response.bytes().await.map_err(|error| {
         eprintln!(
@@ -3329,19 +3394,7 @@ fn playback_ranges(total: usize) -> Vec<(usize, usize)> {
 }
 
 fn audio_chunk_size(total: u64) -> u64 {
-    (total / OFFLINE_CHUNK_CONCURRENCY as u64)
-        .max(AUDIO_MIN_CHUNK_BYTES)
-        .min(OFFLINE_CHUNK_BYTES)
-}
-
-fn offline_http_client(request_url: &url::Url) -> Result<reqwest::Client, CommandError> {
-    let mut client_builder = http_client_builder();
-    if let Some(local_address) = signed_googlevideo_local_address(request_url) {
-        client_builder = client_builder.local_address(local_address);
-    }
-    client_builder
-        .build()
-        .map_err(|error| cache_error(format!("audio HTTP client creation failed: {error}")))
+    (total / OFFLINE_CHUNK_CONCURRENCY as u64).clamp(AUDIO_MIN_CHUNK_BYTES, OFFLINE_CHUNK_BYTES)
 }
 
 /// Appends googlevideo's `range` query parameter.
@@ -3553,7 +3606,7 @@ async fn fetch_audio_ranged(
         return Ok(whole);
     }
 
-    let client = offline_http_client(&request_url)?;
+    let client = http_client(signed_googlevideo_local_address(&request_url));
 
     let chunk_size = audio_chunk_size(total_bytes);
     let mut ranges = Vec::new();
@@ -3666,7 +3719,7 @@ fn write_offline_entry(
 
 /// Serves an already-downloaded track through the same local media server the online path
 /// uses, so playback needs no special case for offline sources.
-#[tauri::command]
+#[tauri::command(async)]
 fn offline_audio_source(
     app: tauri::AppHandle,
     track_id: String,
@@ -3688,12 +3741,7 @@ fn offline_audio_source(
     })
 }
 
-#[tauri::command]
-fn offline_audio_has(app: tauri::AppHandle, track_id: String) -> Result<bool, CommandError> {
-    Ok(offline_entry_path(&app, &track_id)?.exists())
-}
-
-#[tauri::command]
+#[tauri::command(async)]
 fn offline_audio_remove(app: tauri::AppHandle, track_id: String) -> Result<(), CommandError> {
     let path = offline_entry_path(&app, &track_id)?;
     let _ = fs::remove_file(path.with_extension("art"));
@@ -3722,12 +3770,9 @@ async fn offline_artwork_save(
     if !url.starts_with("https://") {
         return Err(cache_error("artwork URL must be https"));
     }
-    let client = http_client_builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .map_err(|error| cache_error(format!("artwork client creation failed: {error}")))?;
-    let bytes = client
+    let bytes = http_client(None)
         .get(&url)
+        .timeout(Duration::from_secs(20))
         .send()
         .await
         .and_then(|response| response.error_for_status())
@@ -3745,7 +3790,7 @@ async fn offline_artwork_save(
     fs::write(&path, &bytes).map_err(|error| cache_error(format!("artwork save failed: {error}")))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn offline_artwork(app: tauri::AppHandle, track_id: String) -> Result<Option<LocalArtwork>, CommandError> {
     use base64::Engine;
 
@@ -3763,7 +3808,7 @@ fn offline_artwork(app: tauri::AppHandle, track_id: String) -> Result<Option<Loc
 
 /// The source of truth for what is downloaded. The frontend keeps its own manifest for track
 /// metadata, but this is what reconciles it when the two disagree.
-#[tauri::command]
+#[tauri::command(async)]
 fn offline_audio_list(app: tauri::AppHandle) -> Result<Vec<OfflineEntryInfo>, CommandError> {
     let dir = offline_dir(&app)?;
     if !dir.exists() {
@@ -3790,21 +3835,12 @@ fn offline_audio_list(app: tauri::AppHandle) -> Result<Vec<OfflineEntryInfo>, Co
     Ok(entries)
 }
 
-#[tauri::command]
-fn offline_audio_stats(app: tauri::AppHandle) -> Result<OfflineStats, CommandError> {
-    let entries = offline_audio_list(app)?;
-    Ok(OfflineStats {
-        entry_count: entries.len() as u64,
-        used_bytes: entries.iter().map(|entry| entry.byte_length).sum(),
-    })
-}
-
 /// Deletes least-recently-*modified* entries until the store fits `max_bytes`.
 ///
 /// Modification time rather than access time: access times are unreliable on Windows and
 /// playing a track does not rewrite the file, so mtime is effectively "when it was
 /// downloaded" -- a blunt but stable ordering.
-#[tauri::command]
+#[tauri::command(async)]
 fn offline_audio_prune(app: tauri::AppHandle, max_bytes: u64) -> Result<OfflineStats, CommandError> {
     let dir = offline_dir(&app)?;
     if !dir.exists() {
@@ -4000,13 +4036,7 @@ async fn fill_media_buffer(
         fail(&buffer);
         return;
     };
-    let client = match offline_http_client(&request_url) {
-        Ok(client) => client,
-        Err(_) => {
-            fail(&buffer);
-            return;
-        }
-    };
+    let client = http_client(signed_googlevideo_local_address(&request_url));
 
     let mut stream = futures_util::stream::iter(ranges.into_iter().enumerate().map(
         |(index, (start, end))| {
@@ -4445,7 +4475,7 @@ where
 }
 
 /// The ten band gains and the preamp, in dB. Applies to whatever is playing, immediately.
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_set_equalizer(preamp_db: f32, bands_db: Vec<f32>) -> Result<(), CommandError> {
     if bands_db.len() != equalizer::BAND_COUNT {
         return Err(cache_error(format!(
@@ -4461,24 +4491,24 @@ fn native_audio_set_equalizer(preamp_db: f32, bands_db: Vec<f32>) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_play(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
     audio::request(&state, audio::Command::Play)
         .map_err(cache_error)?
         .map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_pause(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
     state.send(audio::Command::Pause).map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_stop(state: tauri::State<'_, audio::NativeAudio>) -> Result<(), CommandError> {
     state.send(audio::Command::Stop).map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_seek(
     state: tauri::State<'_, audio::NativeAudio>,
     position_sec: f64,
@@ -4488,7 +4518,7 @@ fn native_audio_seek(
         .map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_set_volume(
     state: tauri::State<'_, audio::NativeAudio>,
     volume: f32,
@@ -4507,7 +4537,7 @@ fn native_audio_set_volume(
  * defaults to 1, so it buys a time-stretcher's worth of DSP for very few listeners. Add
  * `signalsmith-stretch` between the decoder and the sink if it turns out to matter.
  */
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_set_rate(
     state: tauri::State<'_, audio::NativeAudio>,
     rate: f32,
@@ -4518,7 +4548,7 @@ fn native_audio_set_rate(
 /// Hands playback to the standby deck, over an equal-power crossfade when `fade_ms` is above
 /// zero and in a single step when it is not. False means nothing was preloaded and the caller
 /// should load normally.
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_transition(
     state: tauri::State<'_, audio::NativeAudio>,
     track_id: String,
@@ -4532,7 +4562,7 @@ fn native_audio_transition(
     .map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_has_standby(
     state: tauri::State<'_, audio::NativeAudio>,
     track_id: String,
@@ -4541,7 +4571,7 @@ fn native_audio_has_standby(
         .map_err(cache_error)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_drop_standby(
     state: tauri::State<'_, audio::NativeAudio>,
 ) -> Result<(), CommandError> {
@@ -4550,7 +4580,7 @@ fn native_audio_drop_standby(
 
 /// Abandons the active deck's load without touching a standby that may already hold the next
 /// track. See `Command::DropActive`.
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_drop_active(
     state: tauri::State<'_, audio::NativeAudio>,
 ) -> Result<(), CommandError> {
@@ -4558,7 +4588,7 @@ fn native_audio_drop_active(
 }
 
 /// Devices cpal can currently see, for the output-device picker in Settings.
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_list_output_devices() -> Result<Vec<audio::AudioOutputDevice>, CommandError> {
     audio::list_output_devices().map_err(cache_error)
 }
@@ -4567,7 +4597,7 @@ fn native_audio_list_output_devices() -> Result<Vec<audio::AudioOutputDevice>, C
 /// reported. `id: None` is the OS default. See `NativeAudio::set_output_device` for what this
 /// does before playback has started versus during it — the latter clears both decks, so the
 /// frontend reloads whatever was playing.
-#[tauri::command]
+#[tauri::command(async)]
 fn native_audio_set_output_device(
     state: tauri::State<'_, audio::NativeAudio>,
     id: Option<String>,
@@ -4575,500 +4605,30 @@ fn native_audio_set_output_device(
     state.set_output_device(id).map_err(cache_error)
 }
 
-#[tauri::command]
-async fn fetch_youtube_music_audio(video_id: String) -> Result<AudioPayload, CommandError> {
-    let started_at = Instant::now();
-    eprintln!(
-        "[internal][tauri][info] fetch_youtube_music_audio start video_id={}",
-        video_id
-    );
-
-    let client = http_client_builder().build().map_err(|error| CommandError {
-        message: format!("HTTP client creation failed: {error}"),
-    })?;
-
-    // Mobile and TV clients are preferred because they are more likely to
-    // return direct media URLs that do not require player-JavaScript deciphering.
-    let api_attempts = vec![
-        ("YouTube iOS", YOUTUBE_PLAYER_API_URL, create_ios_context()),
-        (
-            "YouTube ANDROID",
-            YOUTUBE_PLAYER_API_URL,
-            create_android_context(),
-        ),
-        ("YouTube TV", YOUTUBE_PLAYER_API_URL, create_tv_context()),
-        ("YouTube WEB", YOUTUBE_PLAYER_API_URL, create_web_context()),
-        (
-            "YouTube Music WEB_REMIX",
-            YOUTUBE_MUSIC_PLAYER_API_URL,
-            create_web_remix_context(),
-        ),
-    ];
-
-    let mut failures = Vec::new();
-    for (attempt_name, api_url, context) in api_attempts {
-        eprintln!(
-            "[internal][tauri][info] fetch_youtube_music_audio trying {} video_id={}",
-            attempt_name, video_id
-        );
-
-        match try_youtube_api(&client, &api_url, &context, &video_id, &attempt_name).await {
-            Ok(audio_bytes) => {
-                eprintln!(
-                    "[internal][tauri][info] fetch_youtube_music_audio success video_id={} attempt={} bytes={} duration_ms={}",
-                    video_id,
-                    attempt_name,
-                    audio_bytes.body_base64.len(),
-                    started_at.elapsed().as_millis()
-                );
-                return Ok(audio_bytes);
-            }
-            Err(error) => {
-                eprintln!(
-                    "[internal][tauri][error] fetch_youtube_music_audio attempt failed video_id={} attempt={} error={}",
-                    video_id, attempt_name, error.message
-                );
-                failures.push(format!("{attempt_name}: {}", error.message));
-            }
+/// Rejects targets a compromised renderer could use to reach the machine or its LAN.
+fn is_public_http_target(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(host)) => {
+            matches!(url.scheme(), "https" | "http") && !host.eq_ignore_ascii_case("localhost")
         }
+        Some(url::Host::Ipv4(ip)) => {
+            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            !(ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local() || ip.is_unicast_link_local())
+        }
+        None => false,
     }
-
-    eprintln!(
-        "[internal][tauri][error] fetch_youtube_music_audio all attempts failed video_id={}",
-        video_id
-    );
-    Err(CommandError {
-        message: format!("all YouTube API attempts failed: {}", failures.join("; ")),
-    })
 }
 
-fn create_web_remix_context() -> serde_json::Value {
-    serde_json::json!({
-        "client": {
-            "clientName": "WEB_REMIX",
-            "clientVersion": "1.20250506.00.00",
-            "hl": "en",
-            "gl": "US",
-            "platform": "DESKTOP",
-            "osName": "Windows",
-            "osVersion": "10.0",
-            "browserName": "Chrome",
-            "browserVersion": "135.0.0.0",
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-        }
-    })
-}
-
-fn create_web_context() -> serde_json::Value {
-    serde_json::json!({
-        "client": {
-            "clientName": "WEB",
-            "clientVersion": "2.20260206.01.00",
-            "hl": "en",
-            "gl": "US",
-            "platform": "DESKTOP",
-            "osName": "Windows",
-            "osVersion": "10.0",
-            "browserName": "Chrome",
-            "browserVersion": "135.0.0.0",
-            "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-        }
-    })
-}
-
-fn create_ios_context() -> serde_json::Value {
-    serde_json::json!({
-        "client": {
-            "clientName": "IOS",
-            "clientVersion": "20.11.6",
-            "hl": "en",
-            "gl": "US",
-            "deviceModel": "iPhone10,4",
-            "osName": "iPhone",
-            "osVersion": "16.7.7.20H330",
-            "userAgent": "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)"
-        }
-    })
-}
-
-fn create_android_context() -> serde_json::Value {
-    serde_json::json!({
-        "client": {
-            "clientName": "ANDROID",
-            "clientVersion": "21.03.36",
-            "hl": "en",
-            "gl": "US",
-            "platform": "MOBILE",
-            "osName": "Android",
-            "osVersion": "16",
-            "androidSdkVersion": 36,
-            "userAgent": "com.google.android.youtube/21.03.36(Linux; U; Android 16; en_US; SM-S908E Build/TP1A.220624.014) gzip"
-        }
-    })
-}
-
-fn create_tv_context() -> serde_json::Value {
-    serde_json::json!({
-        "client": {
-            "clientName": "TVHTML5",
-            "clientVersion": "7.20260311.12.00",
-            "hl": "en",
-            "gl": "US",
-            "platform": "TV",
-            "osName": "Linux",
-            "userAgent": "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
-        }
-    })
-}
-
-async fn try_youtube_api(
-    client: &reqwest::Client,
-    api_url: &str,
-    context: &serde_json::Value,
-    video_id: &str,
-    attempt_name: &str,
-) -> Result<AudioPayload, CommandError> {
-    let request_body = serde_json::json!({
-        "context": context,
-        "videoId": video_id,
-        "racyCheckOk": true,
-        "contentCheckOk": true
-    });
-
-    let request_body_str = serde_json::to_string(&request_body).map_err(|error| CommandError {
-        message: format!("json serialize failed: {error}"),
-    })?;
-
-    let referer = if attempt_name.contains("Music") {
-        "https://music.youtube.com/"
-    } else {
-        "https://www.youtube.com/"
-    };
-
-    let user_agent = if attempt_name.contains("iOS") {
-        "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)"
-    } else if attempt_name.contains("ANDROID") {
-        "com.google.android.youtube/21.03.36(Linux; U; Android 16; en_US; SM-S908E Build/TP1A.220624.014) gzip"
-    } else if attempt_name.contains("TV") {
-        "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
-    } else {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
-    };
-    let client_name = if attempt_name.contains("iOS") {
-        "5"
-    } else if attempt_name.contains("ANDROID") {
-        "3"
-    } else if attempt_name.contains("Music") {
-        "67"
-    } else if attempt_name.contains("TV") {
-        "7"
-    } else {
-        "1"
-    };
-    let client_version = context
-        .get("client")
-        .and_then(|client| client.get("clientVersion"))
-        .and_then(|version| version.as_str())
-        .unwrap_or_default();
-
-    eprintln!(
-        "[internal][tauri][debug] YOUTUBE API REQUEST - {} url={} body_bytes={}",
-        attempt_name,
-        api_url,
-        request_body_str.len()
-    );
-
-    let response = client
-        .post(api_url)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", user_agent)
-        .header("Accept", "application/json")
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .header("X-YouTube-Client-Name", client_name)
-        .header("X-YouTube-Client-Version", client_version)
-        .header("Referer", referer)
-        .header("Origin", referer.trim_end_matches('/'))
-        .body(request_body_str)
-        .send()
-        .await
-        .map_err(|error| CommandError {
-            message: format!("api request failed: {error}"),
-        })?;
-
-    let response_status = response.status();
-    let response_text = response.text().await.map_err(|error| CommandError {
-        message: format!("response read failed: {error}"),
-    })?;
-    if !response_status.is_success() {
-        let response_preview = response_text.chars().take(500).collect::<String>();
-        return Err(CommandError {
-            message: format!("api request returned {response_status}: {response_preview}"),
-        });
-    }
-
-    eprintln!(
-        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - response_bytes={}",
-        attempt_name,
-        response_text.len()
-    );
-
-    let response_json: serde_json::Value =
-        serde_json::from_str(&response_text).map_err(|error| CommandError {
-            message: format!("json parse failed: {error}"),
-        })?;
-    let visitor_data = response_json
-        .get("responseContext")
-        .and_then(|context| context.get("visitorData"))
-        .and_then(|value| value.as_str());
-
-    // LOG PARSED RESPONSE STRUCTURE
-    eprintln!(
-        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - PARSED STRUCTURE",
-        attempt_name
-    );
-    eprintln!(
-        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - TOP LEVEL KEYS: {:?}",
-        attempt_name,
-        response_json
-            .as_object()
-            .map(|obj| obj.keys().collect::<Vec<_>>())
-            .unwrap_or_default()
-    );
-
-    // Check for playability status first
-    if let Some(playability_status) = response_json.get("playabilityStatus") {
-        let status = playability_status
-            .get("status")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
-        let reason = playability_status
-            .get("reason")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        eprintln!(
-            "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - PLAYABILITY STATUS status={} has_reason={}",
-            attempt_name, status, !reason.is_empty()
-        );
-
-        if status != "OK" {
-            eprintln!(
-                "[internal][tauri][warn] YOUTUBE API RESPONSE - {} - VIDEO NOT PLAYABLE: status={} has_reason={}",
-                attempt_name, status, !reason.is_empty()
-            );
-            return Err(CommandError {
-                message: format!("video not playable: {status}"),
-            });
-        }
-    }
-
-    // Check for video details
-    if let Some(video_details) = response_json.get("videoDetails") {
-        let duration_seconds = video_details
-            .get("lengthSeconds")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
-        eprintln!(
-            "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - VIDEO DETAILS has_title={} duration_seconds={}",
-            attempt_name,
-            video_details.get("title").is_some(),
-            duration_seconds
-        );
-    }
-
-    // Check for streaming data existence
-    let has_streaming_data = response_json.get("streamingData").is_some();
-    eprintln!(
-        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - HAS STREAMING DATA: {}",
-        attempt_name, has_streaming_data
-    );
-
-    if has_streaming_data {
-        if let Some(streaming_data) = response_json.get("streamingData") {
-            eprintln!(
-                "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - STREAMING DATA KEYS: {:?}",
-                attempt_name,
-                streaming_data
-                    .as_object()
-                    .map(|obj| obj.keys().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            );
-
-            // Log adaptive formats if they exist
-            if let Some(adaptive_formats) = streaming_data.get("adaptiveFormats") {
-                if let Some(formats_array) = adaptive_formats.as_array() {
-                    eprintln!(
-                        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - ADAPTIVE FORMATS COUNT: {}",
-                        attempt_name,
-                        formats_array.len()
-                    );
-
-                    // Count audio vs video formats
-                    let mut audio_count = 0;
-                    let mut video_count = 0;
-                    let mut audio_with_url = 0;
-                    let mut video_with_url = 0;
-
-                    for format in formats_array {
-                        if let Some(format_obj) = format.as_object() {
-                            if let Some(mime_type) =
-                                format_obj.get("mimeType").and_then(|m| m.as_str())
-                            {
-                                if mime_type.contains("audio") {
-                                    audio_count += 1;
-                                    if format_obj.get("url").is_some() {
-                                        audio_with_url += 1;
-                                    }
-                                } else if mime_type.contains("video") {
-                                    video_count += 1;
-                                    if format_obj.get("url").is_some() {
-                                        video_with_url += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    eprintln!(
-                        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - FORMAT SUMMARY: audio_total={}, audio_with_url={}, video_total={}, video_with_url={}",
-                        attempt_name,
-                        audio_count,
-                        audio_with_url,
-                        video_count,
-                        video_with_url
-                    );
-                }
-            }
-
-            // Log regular formats if they exist
-            if let Some(formats) = streaming_data.get("formats") {
-                if let Some(formats_array) = formats.as_array() {
-                    eprintln!(
-                        "[internal][tauri][debug] YOUTUBE API RESPONSE - {} - REGULAR FORMATS COUNT: {}",
-                        attempt_name,
-                        formats_array.len()
-                    );
-                }
-            }
-        }
-    }
-
-    // Look for streaming data in the response
-    let streaming_data = response_json
-        .get("streamingData")
-        .and_then(|sd| sd.get("adaptiveFormats"))
-        .and_then(|af| af.as_array())
-        .ok_or_else(|| {
-            eprintln!(
-                "[internal][tauri][error] YOUTUBE API RESPONSE - {} - NO STREAMING DATA FOUND",
-                attempt_name
-            );
-            CommandError {
-                message: "no streaming data found".to_string(),
-            }
-        })?;
-
-    // Ciphered formats require YouTube's player JavaScript. This backend only
-    // accepts direct URLs instead of sending an invalid encrypted signature.
-    let mut best_audio_url: Option<String> = None;
-    let mut best_mime_type: Option<String> = None;
-    let mut best_is_mp4 = false;
-    let mut best_bitrate: u32 = 0;
-
-    for format in streaming_data {
-        if let Some(format_obj) = format.as_object() {
-            if let (Some(mime_type), Some(bitrate)) = (
-                format_obj.get("mimeType"),
-                format_obj.get("bitrate").and_then(|b| b.as_u64()),
-            ) {
-                if let Some(mime_str) = mime_type.as_str() {
-                    let is_mp4 = mime_str.starts_with("audio/mp4");
-                    let is_better = is_mp4 && !best_is_mp4
-                        || is_mp4 == best_is_mp4 && bitrate > best_bitrate as u64;
-                    if mime_str.starts_with("audio/") && is_better {
-                        if let Some(url) = format_obj.get("url").and_then(|u| u.as_str()) {
-                            best_audio_url = Some(url.to_string());
-                            best_mime_type = Some(
-                                mime_str
-                                    .split(';')
-                                    .next()
-                                    .unwrap_or("audio/mp4")
-                                    .to_string(),
-                            );
-                            best_is_mp4 = is_mp4;
-                            best_bitrate = bitrate as u32;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let audio_url = best_audio_url.ok_or_else(|| CommandError {
-        message: "no suitable audio format found".to_string(),
-    })?;
-    let mime_type = best_mime_type.unwrap_or_else(|| "audio/mp4".to_string());
-
-    eprintln!(
-        "[internal][tauri][debug] Attempting to download audio from URL (first 200 chars): {}",
-        audio_url.chars().take(200).collect::<String>()
-    );
-
-    let audio_url_parsed = url::Url::parse(&audio_url).map_err(|error| CommandError {
-        message: format!("audio URL parse failed: {error}"),
-    })?;
-    let mut audio_client_builder = http_client_builder();
-    if let Some(local_address) = signed_googlevideo_local_address(&audio_url_parsed) {
-        eprintln!(
-            "[internal][tauri][info] fetch_youtube_music_audio forcing signed IP family attempt={} family={}",
-            attempt_name,
-            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
-        );
-        audio_client_builder = audio_client_builder.local_address(local_address);
-    }
-    let audio_client = audio_client_builder.build().map_err(|error| CommandError {
-        message: format!("audio HTTP client creation failed: {error}"),
-    })?;
-
-    // Download the audio
-    let mut audio_request = audio_client
-        .get(&audio_url)
-        .header("User-Agent", user_agent)
-        .header("Accept", "*/*")
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .header("Accept-Encoding", "identity;q=1, *;q=0")
-        .header("Range", "bytes=0-");
-
-    if let Some(visitor_data) = visitor_data {
-        audio_request = audio_request.header("X-Goog-Visitor-Id", visitor_data);
-    }
-
-    if !attempt_name.contains("iOS") && !attempt_name.contains("ANDROID") {
-        audio_request = audio_request
-            .header("Referer", referer)
-            .header("Origin", referer.trim_end_matches('/'))
-            .header("Sec-Fetch-Dest", "audio")
-            .header("Sec-Fetch-Mode", "no-cors")
-            .header("Sec-Fetch-Site", "cross-site");
-    }
-
-    let audio_response = audio_request.send().await.map_err(|error| CommandError {
-        message: format!("download failed: {error}"),
-    })?;
-
-    if !audio_response.status().is_success() {
-        return Err(CommandError {
-            message: format!("download returned {}", audio_response.status()),
-        });
-    }
-
-    let audio_body = audio_response.bytes().await.map_err(|error| CommandError {
-        message: format!("download body read failed: {error}"),
-    })?;
-
-    Ok(AudioPayload {
-        body_base64: STANDARD.encode(audio_body),
-        mime_type,
-    })
+/// `[u32 LE meta length][meta JSON][body]`: binary IPC, so bodies are never base64-inflated.
+fn framed_response(meta: &impl Serialize, body: &[u8]) -> Result<tauri::ipc::Response, CommandError> {
+    let meta = serde_json::to_vec(meta).map_err(|error| cache_error(error.to_string()))?;
+    let mut frame = Vec::with_capacity(4 + meta.len() + body.len());
+    frame.extend_from_slice(&(meta.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&meta);
+    frame.extend_from_slice(body);
+    Ok(tauri::ipc::Response::new(frame))
 }
 
 #[tauri::command]
@@ -5077,40 +4637,24 @@ async fn proxy_http_request(
     jar: tauri::State<'_, YoutubeCookieJar>,
     account_lock: tauri::State<'_, AccountStoreLock>,
     mut input: ProxyHttpRequestInput,
-) -> Result<ProxyHttpResponse, CommandError> {
+) -> Result<tauri::ipc::Response, CommandError> {
     let started_at = Instant::now();
-    let request_url = url::Url::parse(&input.url).map_err(|error| CommandError {
-        message: format!("invalid URL: {error}"),
-    })?;
+    let request_url = url::Url::parse(&input.url)
+        .ok()
+        .filter(is_public_http_target)
+        .ok_or_else(|| cache_error("URL is not an allowed request target"))?;
     let request_target = format!(
         "{}://{}{}",
         request_url.scheme(),
         request_url.host_str().unwrap_or("unknown"),
         request_url.path()
     );
-    eprintln!(
-        "[internal][tauri][info] proxy_http_request start method={} url={} headers={} has_body={}",
-        input.method,
-        request_target,
-        input.headers.len(),
-        input.body_base64.is_some()
-    );
 
-    /*
-     * Outgoing cookies come from the jar, not from the caller.
-     *
-     * youtubei.js bakes the cookie into a session when the client is constructed, so a session
-     * that has been alive for hours would otherwise keep replaying whatever was current when it
-     * was built. Only requests that already carry a Cookie header are stamped: the download
-     * client is deliberately anonymous and has to stay that way.
-     */
+    // Outgoing cookies come from the jar: a long-lived youtubei.js session would replay a stale one.
+    // Only requests already carrying a Cookie are stamped, so the anonymous download client stays so.
     let youtube_host = is_youtube_cookie_host(&request_url);
     if youtube_host {
-        let live_cookie = jar
-            .0
-            .lock()
-            .ok()
-            .and_then(|state| state.cookie.clone());
+        let live_cookie = jar.0.lock().ok().and_then(|state| state.cookie.clone());
         if let Some(live_cookie) = live_cookie {
             if let Some(key) = input
                 .headers
@@ -5123,107 +4667,35 @@ async fn proxy_http_request(
         }
     }
 
-    /*
-     * One line, not one call per header.
-     *
-     * This used to `eprintln!` every header separately — 10-15 calls per request, each through
-     * the macro that sanitizes, writes to stderr *and* takes a mutex to append to the log file
-     * on disk. A search-heavy session (or a track load, which alone fires several proxied
-     * requests) turned this into hundreds of synchronous disk writes for a debug dump the line
-     * above it already summarizes the count of. Joining first pays that cost once per request
-     * instead of once per header, with the same redaction.
-     */
-    if !input.headers.is_empty() {
-        let header_summary = input
-            .headers
-            .iter()
-            .map(|(key, value)| {
-                let normalized_key = key.to_ascii_lowercase();
-                let safe_value = if normalized_key == "authorization" || normalized_key == "cookie"
-                {
-                    "[redacted]"
-                } else {
-                    value.as_str()
-                };
-                format!("{key}={safe_value}")
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        eprintln!("[internal][tauri][debug] proxy_http_request headers: {header_summary}");
+    let method = reqwest::Method::from_bytes(input.method.as_bytes())
+        .map_err(|error| cache_error(format!("invalid method: {error}")))?;
+    let mut request = http_client(signed_googlevideo_local_address(&request_url))
+        .request(method, request_url.clone());
+    if !input.headers.keys().any(|key| key.eq_ignore_ascii_case("user-agent")) {
+        request = request.header(reqwest::header::USER_AGENT, BROWSER_USER_AGENT);
     }
-    let method = reqwest::Method::from_bytes(input.method.as_bytes()).map_err(|error| {
-        eprintln!(
-            "[internal][tauri][error] proxy_http_request invalid method={} error={}",
-            input.method, error
-        );
-        CommandError {
-            message: format!("invalid method: {error}"),
-        }
-    })?;
-
-    let mut client_builder = http_client_builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36");
-
-    if let Some(timeout_ms) = input.timeout_ms {
-        client_builder = client_builder.timeout(Duration::from_millis(timeout_ms));
-    }
-
-    if let Some(local_address) = signed_googlevideo_local_address(&request_url) {
-        eprintln!(
-            "[internal][tauri][info] proxy_http_request forcing signed IP family url={} family={}",
-            request_target,
-            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
-        );
-        client_builder = client_builder.local_address(local_address);
-    }
-
-    let client = client_builder.build().map_err(|error| CommandError {
-        message: format!("HTTP client creation failed: {error}"),
-    })?;
-    let mut request = client.request(method, &input.url);
-
     for (key, value) in &input.headers {
         request = request.header(key, value);
     }
-
+    if let Some(timeout_ms) = input.timeout_ms {
+        request = request.timeout(Duration::from_millis(timeout_ms));
+    }
     if let Some(body_base64) = input.body_base64 {
-        let bytes = STANDARD.decode(body_base64).map_err(|error| {
-            eprintln!(
-                "[internal][tauri][error] proxy_http_request body decode failed url={} error={}",
-                input.url, error
-            );
-            CommandError {
-                message: format!("invalid body encoding: {error}"),
-            }
-        })?;
+        let bytes = STANDARD
+            .decode(body_base64)
+            .map_err(|error| cache_error(format!("invalid body encoding: {error}")))?;
         request = request.body(bytes);
     }
 
     let response = request.send().await.map_err(|error| {
-        // reqwest's own Display is just the top-level "error sending request for url" wrapper —
-        // the actual cause (DNS failure, TLS handshake, connection refused/reset) lives in the
-        // source chain underneath it and was getting dropped, leaving every network failure
-        // indistinguishable in the log from every other one.
-        eprintln!(
-            "[internal][tauri][error] proxy_http_request request failed url={} error={}",
-            input.url,
-            error_cause_chain(&error)
-        );
-        CommandError {
-            message: format!("request failed: {}", error_cause_chain(&error)),
-        }
+        // The cause chain holds the real reason (DNS, TLS, reset); Display alone hides it.
+        let cause = error_cause_chain(&error);
+        eprintln!("[internal][tauri][error] proxy_http_request failed url={request_target} error={cause}");
+        cache_error(format!("request failed: {cause}"))
     })?;
 
     let status = response.status().as_u16();
-    let mut headers = HashMap::new();
-    for (key, value) in response.headers() {
-        if let Ok(value_str) = value.to_str() {
-            headers.insert(key.to_string(), value_str.to_string());
-        }
-    }
-
-    // Read before the map above flattens them: a response sets several cookies at once, and a
-    // HashMap keeps only the last.
+    // Collected before the header map flattens them: one response can set several cookies.
     let refreshed_cookie = if youtube_host {
         let set_cookies = response
             .headers()
@@ -5237,60 +4709,30 @@ async fn proxy_http_request(
     } else {
         None
     };
-
+    let headers: HashMap<String, String> = response
+        .headers()
+        .iter()
+        .filter_map(|(key, value)| Some((key.to_string(), value.to_str().ok()?.to_string())))
+        .collect();
     let body = response.bytes().await.map_err(|error| {
-        eprintln!(
-            "[internal][tauri][error] proxy_http_request body read failed url={} error={}",
-            input.url, error
-        );
-        CommandError {
-            message: format!("read body failed: {error}"),
-        }
+        eprintln!("[internal][tauri][error] proxy_http_request body read failed url={request_target} error={error}");
+        cache_error(format!("read body failed: {error}"))
     })?;
 
-    if request_url.path().ends_with("/browse") && status < 400 {
-        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-            let top_level_keys = json
-                .as_object()
-                .map(|object| object.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            let mut renderer_counts = HashMap::new();
-            collect_json_renderer_counts(&json, &mut renderer_counts);
-            eprintln!(
-                "[internal][tauri][debug] proxy_http_request browse_shape top_level_keys={:?} renderer_counts={:?}",
-                top_level_keys, renderer_counts
-            );
-        }
-    }
-
-    if status >= 400 {
-        eprintln!(
-            "[internal][tauri][warn] proxy_http_request error_response method={} url={} status={} bytes={}",
-            input.method,
-            request_target,
-            status,
-            body.len()
-        );
-    }
-
     eprintln!(
-        "[internal][tauri][info] proxy_http_request success method={} url={} status={} bytes={} duration_ms={}",
+        "[internal][tauri][info] proxy_http_request {} url={} status={} bytes={} duration_ms={}",
         input.method,
         request_target,
         status,
         body.len(),
         started_at.elapsed().as_millis()
     );
-
-    Ok(ProxyHttpResponse {
-        status,
-        headers,
-        body_base64: STANDARD.encode(body),
-        cookie: refreshed_cookie,
-    })
+    framed_response(&ProxyHttpResponse { status, headers, cookie: refreshed_cookie }, &body)
 }
 
-#[tauri::command]
+// Arguments mirror the JS payload one-to-one; a wrapper struct would only rename them.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
 fn discord_rpc_update(
     discord_manager: tauri::State<
         '_,
@@ -5334,7 +4776,7 @@ fn discord_rpc_update(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn discord_rpc_clear(
     discord_manager: tauri::State<
         '_,
@@ -5357,7 +4799,7 @@ fn discord_rpc_clear(
 /// The compositor the app is running under, so the frontend can decide whether the
 /// window manager already provides window management (tiling compositors) or the app
 /// must draw its own buttons.
-#[tauri::command]
+#[tauri::command(async)]
 fn desktop_environment() -> String {
     std::env::var("XDG_CURRENT_DESKTOP")
         .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
@@ -5388,8 +4830,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
-        .manage(CacheLock(Mutex::new(())))
-        .manage(AppSettingsLock(Mutex::new(())))
+        .manage(CacheLock(Mutex::new(None)))
+        .manage(AppSettings::default())
         .manage(AccountStoreLock(Mutex::new(())))
         .manage(YoutubeCookieJar(Mutex::new(CookieJarState::default())))
         .manage(discord_manager)
@@ -5401,7 +4843,7 @@ pub fn run() {
 
     #[cfg(not(debug_assertions))]
     {
-        let port = pick_unused_port().expect("failed to find an unused localhost port");
+        let port = ui_port();
         let url: url::Url = format!("http://localhost:{}", port)
             .parse()
             .expect("failed to parse localhost url");
@@ -5430,9 +4872,12 @@ pub fn run() {
             // Before the log is initialised, so a first run after the rename still logs to
             // the directory the user's settings were just restored into.
             migrate_legacy_app_data(app.handle());
+            install_panic_logger();
             if let Err(error) = initialize_app_log(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] {}", error.message);
             }
+            #[cfg(target_os = "linux")]
+            linux_media::mirror_volume(app.handle());
             // Always built, so toggling the setting takes effect without a restart.
             if let Err(error) = build_tray(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] tray unavailable: {error}");
@@ -5487,15 +4932,21 @@ pub fn run() {
                     });
                 }
             }
-            tauri::WindowEvent::Focused(true) => {
-                if window.label() == "main" {
-                    let _ = window.app_handle().emit("window-focused", ());
+            tauri::WindowEvent::Focused(true) if window.label() == "main" => {
+                if let Some(main) = window.app_handle().get_webview_window("main") {
+                    set_webview_memory_low(&main, false);
+                }
+                let _ = window.app_handle().emit("window-focused", ());
+            }
+            // Minimise and restore both arrive as resizes.
+            tauri::WindowEvent::Resized(_) if window.label() == "main" => {
+                if let Some(main) = window.app_handle().get_webview_window("main") {
+                    set_webview_memory_low(&main, main.is_minimized().unwrap_or(false));
                 }
             }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
             desktop_environment,
             quit_app,
             frontend_log,
@@ -5504,18 +4955,14 @@ pub fn run() {
             app_setting_remove,
             app_settings_clear,
             open_current_log,
-            fetch_audio_bytes,
             fetch_audio_source,
             offline_audio_save,
             offline_audio_source,
-            offline_audio_has,
             offline_audio_remove,
             offline_audio_list,
             offline_artwork_save,
             offline_artwork,
-            offline_audio_stats,
             offline_audio_prune,
-            fetch_youtube_music_audio,
             native_audio_load,
             native_audio_play,
             native_audio_pause,
@@ -5547,15 +4994,14 @@ pub fn run() {
             cache_clear,
             local_audio_scan,
             local_audio_read,
-            read_text_file,
-            write_text_file,
+            import_text_file,
+            export_text_file,
             local_audio_read_tags,
             local_audio_artwork,
             read_image_file,
             process_memory::app_memory_report,
             local_audio_write_tags,
             local_audio_watch,
-            local_audio_unwatch,
             lastfm::lastfm_auth_token,
             lastfm::lastfm_complete_auth,
             lastfm::lastfm_disconnect,
@@ -5585,6 +5031,7 @@ mod tests {
         load_superseded, LOAD_GENERATION, bytes_preview,
         YoutubeAccountStore, generate_slot_id, login_partition_directory_name,
         decode_slot_id_bytes, LEGACY_ACCOUNT_SLOT_ID,
+        enforce_cache_limit, is_public_http_target, load_settings_file, write_settings_file, SettingsMap,
     };
     use std::sync::atomic::Ordering;
     use super::audio::BufferReader;
@@ -5610,9 +5057,81 @@ mod tests {
     }
 
     // Every request goes through this builder; a root reqwest refuses would break all of them (#143).
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("zuno-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn settings_survive_a_corrupt_file_via_the_backup() {
+        let path = scratch_dir("settings").join("settings.json");
+        let mut first = SettingsMap::new();
+        first.insert("theme".into(), serde_json::json!("dark"));
+        write_settings_file(&path, &first).unwrap();
+        let mut second = first.clone();
+        second.insert("volume".into(), serde_json::json!(0.5));
+        write_settings_file(&path, &second).unwrap();
+        assert_eq!(load_settings_file(&path), second);
+
+        // A torn or corrupt write falls back to the previous good file instead of starting empty.
+        std::fs::write(&path, b"{\"theme\": ").unwrap();
+        assert_eq!(load_settings_file(&path), first);
+        std::fs::write(&path, b"").unwrap();
+        assert_eq!(load_settings_file(&path), first);
+    }
+
+    #[test]
+    fn cache_eviction_drops_least_recently_used_first() {
+        let dir = scratch_dir("cache");
+        let now = std::time::SystemTime::now();
+        for (index, name) in ["old", "mid", "new"].iter().enumerate() {
+            let path = dir.join(format!("{name}.json"));
+            std::fs::write(&path, vec![b'x'; 100]).unwrap();
+            let age = std::time::Duration::from_secs(30 - index as u64 * 10);
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(now - age).unwrap();
+        }
+        assert_eq!(enforce_cache_limit(&dir, 1_000), 300, "under the cap nothing is evicted");
+        assert_eq!(enforce_cache_limit(&dir, 250), 200);
+        assert!(!dir.join("old.json").exists() && dir.join("mid.json").exists() && dir.join("new.json").exists());
+    }
+
+    #[test]
+    fn proxy_refuses_local_and_private_targets() {
+        let allowed = |url: &str| is_public_http_target(&url::Url::parse(url).unwrap());
+        assert!(allowed("https://music.youtube.com/youtubei/v1/browse"));
+        assert!(allowed("https://8.8.8.8/"));
+        for blocked in [
+            "http://localhost:47731/",
+            "http://127.0.0.1/",
+            "http://192.168.1.1/admin",
+            "http://10.0.0.2/",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]/",
+            "http://[fd00::1]/",
+            "file:///C:/Windows/win.ini",
+        ] {
+            assert!(!allowed(blocked), "{blocked}");
+        }
+    }
+
+    #[test]
+    fn media_buffer_reads_across_chunks_into_a_slice() {
+        let mut buffer = MediaBuffer::pending(6, 3);
+        buffer.put(0, vec![1, 2]);
+        buffer.put(1, vec![3, 4]);
+        let mut out = [0u8; 4];
+        assert_eq!(buffer.read_into(1, &mut out), 3, "stops at the first missing chunk");
+        assert_eq!(&out[..3], &[2, 3, 4]);
+        buffer.put(2, vec![5, 6]);
+        assert_eq!(buffer.read_into(1, &mut out), 4);
+        assert_eq!(out, [2, 3, 4, 5]);
+    }
+
     #[test]
     fn http_client_builds_with_the_os_trust_store() {
-        assert!(super::http_client_builder().build().is_ok());
+        let _ = super::http_client(None);
     }
 
     /**
@@ -5966,6 +5485,7 @@ mod tests {
         assert!(youtube("https://youtube.com/"));
         // A suffix match alone would hand the session to a lookalike domain.
         assert!(!youtube("https://notyoutube.com/"));
+        assert!(!youtube("http://music.youtube.com/"));
         assert!(!youtube("https://rr6.googlevideo.com/videoplayback"));
     }
 

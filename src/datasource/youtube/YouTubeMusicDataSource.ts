@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Window } from "@tauri-apps/api/window";
 /*
  * Statically imported, deliberately.
  *
@@ -76,13 +76,9 @@ import {
   setLiveCookie,
   tauriFetch,
 } from "./tauriFetch";
+import { decodeFrame } from "../../internal/ipcFrame";
 
 type ClientLabel = "music" | "web" | "download";
-type NativeAudioPayload = {
-  bodyBase64: string;
-  mimeType: string;
-};
-
 type NativeAudioSourcePayload = {
   url: string;
   mimeType: string;
@@ -99,15 +95,6 @@ type MusicColumn = {
     }>;
   };
 };
-
-function decodeBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
 
 type MusicItem = {
   id?: string;
@@ -3129,7 +3116,9 @@ export class YouTubeMusicDataSource extends DataSource {
    * sign-in completed, and it is not worth an error.
    */
   async cancelSignIn(): Promise<void> {
-    const loginWindow = await WebviewWindow.getByLabel(YOUTUBE_LOGIN_WINDOW_LABEL);
+    // A plain Window lookup: the sign-in window holds an address bar and the page as two
+    // child webviews, so no webview carries the window's own label.
+    const loginWindow = await Window.getByLabel(YOUTUBE_LOGIN_WINDOW_LABEL);
     if (!loginWindow) return;
     try {
       await loginWindow.close();
@@ -6270,20 +6259,13 @@ export class YouTubeMusicDataSource extends DataSource {
       if (!track.localPath) {
         throw new Error("Local track path is missing.");
       }
-      const payload = await invoke<NativeAudioPayload>("local_audio_read", {
-        path: track.localPath,
-      });
-      const audioBytes = decodeBase64(payload.bodyBase64);
-      if (audioBytes.byteLength === 0) {
+      const { meta, body } = decodeFrame<{ mimeType: string }>(
+        await invoke<ArrayBuffer>("local_audio_read", { path: track.localPath }),
+      );
+      if (body.byteLength === 0) {
         throw new Error("Local audio file returned no data.");
       }
-      return {
-        bytes: audioBytes.buffer.slice(
-          audioBytes.byteOffset,
-          audioBytes.byteOffset + audioBytes.byteLength,
-        ) as ArrayBuffer,
-        mimeType: payload.mimeType,
-      };
+      return { bytes: body.slice().buffer, mimeType: meta.mimeType };
     }
 
     /*

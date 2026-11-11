@@ -21,6 +21,7 @@ export default defineConfig(async () => ({
       input: {
         main: resolveEntry("./index.html"),
         mini: resolveEntry("./mini.html"),
+        loginBar: resolveEntry("./login-bar.html"),
       },
     },
   },

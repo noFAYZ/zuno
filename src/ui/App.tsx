@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Album, Artist, Playlist, SearchResults, Track } from "../datasource/types";
@@ -46,7 +46,7 @@ import { TitleBar } from "./components/TitleBar";
 import { PlayerBar } from "./components/player/PlayerBar";
 import { QueuePanel } from "./components/player/QueuePanel";
 import { useQueuePanelCollapsed } from "./settings/queuePanel";
-import { useNativeWindowControls } from "./settings/windowControls";
+import { useNativeWindowControls, useWindowOutline } from "./settings/windowControls";
 
 /** Wide enough for a 44px cover plus breathing room, matching the sidebar rail's feel. */
 const COLLAPSED_QUEUE_WIDTH = 62;
@@ -58,7 +58,6 @@ import {
   searchController,
   tabManager,
   useLibraryState,
-  usePlayerSession,
   usePlayerSelector,
   shallowEqual,
 } from "../player/playerStore";
@@ -138,6 +137,8 @@ const MINI_PLAYER_BOTTOM_MARGIN = 24;
 const MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS = 1500;
 /** How often the session is written purely to keep the restored playback position fresh. */
 const SESSION_HEARTBEAT_MS = 5000;
+/** Player changes settle this long before the session is written. */
+const SESSION_PERSIST_DEBOUNCE_MS = 1000;
 const SLEEP_RECOVERY_TIMER_INTERVAL_MS = 15000;
 const SLEEP_RECOVERY_TIMER_DRIFT_MS = 60000;
 const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
@@ -282,6 +283,11 @@ async function hasStoredYoutubeSession(): Promise<boolean> {
   return cookie[0].status === "fulfilled" && cookie[0].value !== null;
 }
 
+function isTextEntry(target: EventTarget | null): boolean {
+  return target instanceof Element
+    && target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])') !== null;
+}
+
 export default function App() {
   useDisableContextMenu();
   const libraryState = useLibraryState();
@@ -299,7 +305,6 @@ export default function App() {
     }),
     shallowEqual,
   );
-  const playerSession = usePlayerSession();
   /* Resolved once at startup. Null in every case except the first launch after an update —
      see resolveReleaseNoteVersion, which records silently for all the others. */
   const [releaseNoteVersion, setReleaseNoteVersion] = useState<string | null>(null);
@@ -377,6 +382,7 @@ export default function App() {
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const isQueuePanelCollapsed = useQueuePanelCollapsed();
   const nativeWindowControls = useNativeWindowControls();
+  const windowOutline = useWindowOutline();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
@@ -788,7 +794,21 @@ export default function App() {
 
   useEffect(() => {
     persistAppSession();
-  }, [activeTabId, nextTabId, persistAppSession, playerSession, tabs]);
+  }, [activeTabId, nextTabId, persistAppSession, tabs]);
+
+  // Subscribed outside render: as a hook this re-rendered the whole app and stringified every
+  // tab's queue on each player emit, a volume drag included.
+  useEffect(() => {
+    let timer = 0;
+    const unsubscribe = tabManager.subscribe(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(persistAppSession, SESSION_PERSIST_DEBOUNCE_MS);
+    });
+    return () => {
+      unsubscribe();
+      window.clearTimeout(timer);
+    };
+  }, [persistAppSession]);
 
   useEffect(() => {
     const unlistenPromise = listen("main-window-recovery-reload", persistAppSession);
@@ -1038,8 +1058,7 @@ export default function App() {
   const handleCreateTab = () => createTab();
 
   const handleSignIn = async () => {
-    await libraryController.signIn();
-    if (libraryController.getState().status !== "ready") return;
+    if (!(await libraryController.signIn())) return;
 
     playerUIStore.setLyricsOpen(false);
     const newId = nextTabId.toString();
@@ -1525,197 +1544,162 @@ export default function App() {
     return () => window.removeEventListener("keydown", preventTabFocusTraversal);
   }, []);
 
+  const handleMouseNavigation = useEffectEvent((event: MouseEvent) => {
+    if (
+      event.button !== MOUSE_BACK_BUTTON
+      && event.button !== MOUSE_FORWARD_BUTTON
+    ) {
+      return;
+    }
+    if (isTextEntry(event.target)) return;
+
+    if (event.button === MOUSE_BACK_BUTTON) {
+      if (isSearchOpen && activeTab?.view !== "settings") {
+        event.preventDefault();
+        setIsSearchOpen(false);
+        return;
+      }
+      if (canNavigateBack) {
+        event.preventDefault();
+        handleNavigateBack();
+      }
+      return;
+    }
+
+    if (canNavigateForward) {
+      event.preventDefault();
+      handleNavigateForward();
+    }
+  });
+
   useEffect(() => {
-    const isTextEntry = (target: EventTarget | null) => {
-      return target instanceof Element
-        && target.closest(
-          'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
-        ) !== null;
+    const listener = (event: MouseEvent) => handleMouseNavigation(event);
+    const preventAuxNavigation = (event: MouseEvent) => {
+      if (event.button === MOUSE_BACK_BUTTON || event.button === MOUSE_FORWARD_BUTTON) {
+        event.preventDefault();
+      }
     };
+    window.addEventListener("mousedown", listener);
+    window.addEventListener("auxclick", preventAuxNavigation);
+    return () => {
+      window.removeEventListener("mousedown", listener);
+      window.removeEventListener("auxclick", preventAuxNavigation);
+    };
+  }, []);
 
-    const handleMouseNavigation = (event: MouseEvent) => {
-      if (
-        event.button !== MOUSE_BACK_BUTTON
-        && event.button !== MOUSE_FORWARD_BUTTON
-      ) {
+  const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
+    if (event.repeat) return;
+    if (event.defaultPrevented) return;
+    const textEntry = isTextEntry(event.target);
+
+    if (!textEntry) {
+      const tabShortcutIndex = TAB_SHORTCUT_ACTIONS.findIndex((action) =>
+        eventMatchesShortcut(event, keyboardShortcuts[action])
+      );
+      const tab = tabs[tabShortcutIndex];
+      if (tabShortcutIndex >= 0 && tab) {
+        event.preventDefault();
+        handleSwitchTab(tab.id);
+      }
+      if (tabShortcutIndex >= 0) return;
+    }
+
+    if (textEntry) return;
+
+    if (
+      eventMatchesShortcut(event, keyboardShortcuts.search)
+      && activeTab?.view !== "settings"
+    ) {
+      event.preventDefault();
+      if (isSearchOpen) dismissSearch();
+      else setIsSearchOpen(true);
+      return;
+    }
+
+    if (eventMatchesShortcut(event, keyboardShortcuts.newTab)) {
+      event.preventDefault();
+      createTab();
+      return;
+    }
+
+    if (eventMatchesShortcut(event, keyboardShortcuts.closeTab)) {
+      event.preventDefault();
+      handleCloseTab(activeTabId);
+      return;
+    }
+
+    if (eventMatchesShortcut(event, keyboardShortcuts.navigateBack)) {
+      if (isSearchOpen && activeTab?.view !== "settings") {
+        event.preventDefault();
+        setIsSearchOpen(false);
         return;
       }
-      if (isTextEntry(event.target)) return;
-
-      if (event.button === MOUSE_BACK_BUTTON) {
-        if (isSearchOpen && activeTab?.view !== "settings") {
-          event.preventDefault();
-          setIsSearchOpen(false);
-          return;
-        }
-        if (canNavigateBack) {
-          event.preventDefault();
-          handleNavigateBack();
-        }
-        return;
+      if (canNavigateBack) {
+        event.preventDefault();
+        handleNavigateBack();
       }
+      return;
+    }
 
+    if (eventMatchesShortcut(event, keyboardShortcuts.navigateForward)) {
       if (canNavigateForward) {
         event.preventDefault();
         handleNavigateForward();
       }
-    };
+      return;
+    }
 
-    const preventAuxNavigation = (event: MouseEvent) => {
-      if (
-        event.button === MOUSE_BACK_BUTTON
-        || event.button === MOUSE_FORWARD_BUTTON
-      ) {
-        event.preventDefault();
+    if (
+      eventMatchesShortcut(event, keyboardShortcuts.playPause)
+      && playerState.currentTrack
+      && playerState.status !== "loading"
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.target instanceof HTMLElement) {
+        event.target.blur();
       }
-    };
+      void playerController.togglePlayPause();
+      return;
+    }
 
-    window.addEventListener("mousedown", handleMouseNavigation);
-    window.addEventListener("auxclick", preventAuxNavigation);
-    return () => {
-      window.removeEventListener("mousedown", handleMouseNavigation);
-      window.removeEventListener("auxclick", preventAuxNavigation);
-    };
-  }, [
-    activeTab?.view,
-    canNavigateBack,
-    canNavigateForward,
-    handleNavigateBack,
-    handleNavigateForward,
-    isSearchOpen,
-  ]);
+    if (
+      eventMatchesShortcut(event, keyboardShortcuts.mute)
+      && playerState.currentTrack
+      && playerState.status !== "loading"
+    ) {
+      event.preventDefault();
+      void playerController.toggleMute();
+      return;
+    }
 
+    if (
+      eventMatchesShortcut(event, keyboardShortcuts.previousTrack)
+      && playerState.currentTrack
+      && playerState.status !== "loading"
+    ) {
+      event.preventDefault();
+      void playerController.skipToPrevious();
+      return;
+    }
+
+    if (
+      eventMatchesShortcut(event, keyboardShortcuts.nextTrack)
+      && playerState.currentTrack
+      && playerState.status !== "loading"
+    ) {
+      event.preventDefault();
+      void playerController.skipToNext();
+    }
+  });
+
+  // An Effect Event reads the latest state, so the listener is bound once rather than re-bound on
+  // every change to the dozen values it reads (and never runs a stale handler in between).
   useEffect(() => {
-    const isTextEntry = (target: EventTarget | null) => {
-      return target instanceof Element
-        && target.closest(
-          'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
-        ) !== null;
-    };
-
-    const handleShortcut = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (event.defaultPrevented) return;
-      const textEntry = isTextEntry(event.target);
-
-      if (!textEntry) {
-        const tabShortcutIndex = TAB_SHORTCUT_ACTIONS.findIndex((action) =>
-          eventMatchesShortcut(event, keyboardShortcuts[action])
-        );
-        const tab = tabs[tabShortcutIndex];
-        if (tabShortcutIndex >= 0 && tab) {
-          event.preventDefault();
-          handleSwitchTab(tab.id);
-        }
-        if (tabShortcutIndex >= 0) return;
-      }
-
-      if (textEntry) return;
-
-      if (
-        eventMatchesShortcut(event, keyboardShortcuts.search)
-        && activeTab?.view !== "settings"
-      ) {
-        event.preventDefault();
-        if (isSearchOpen) dismissSearch();
-        else setIsSearchOpen(true);
-        return;
-      }
-
-      if (eventMatchesShortcut(event, keyboardShortcuts.newTab)) {
-        event.preventDefault();
-        createTab();
-        return;
-      }
-
-      if (eventMatchesShortcut(event, keyboardShortcuts.closeTab)) {
-        event.preventDefault();
-        handleCloseTab(activeTabId);
-        return;
-      }
-
-      if (eventMatchesShortcut(event, keyboardShortcuts.navigateBack)) {
-        if (isSearchOpen && activeTab?.view !== "settings") {
-          event.preventDefault();
-          setIsSearchOpen(false);
-          return;
-        }
-        if (canNavigateBack) {
-          event.preventDefault();
-          handleNavigateBack();
-        }
-        return;
-      }
-
-      if (eventMatchesShortcut(event, keyboardShortcuts.navigateForward)) {
-        if (canNavigateForward) {
-          event.preventDefault();
-          handleNavigateForward();
-        }
-        return;
-      }
-
-      if (
-        eventMatchesShortcut(event, keyboardShortcuts.playPause)
-        && playerState.currentTrack
-        && playerState.status !== "loading"
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.target instanceof HTMLElement) {
-          event.target.blur();
-        }
-        void playerController.togglePlayPause();
-        return;
-      }
-
-      if (
-        eventMatchesShortcut(event, keyboardShortcuts.mute)
-        && playerState.currentTrack
-        && playerState.status !== "loading"
-      ) {
-        event.preventDefault();
-        void playerController.toggleMute();
-        return;
-      }
-
-      if (
-        eventMatchesShortcut(event, keyboardShortcuts.previousTrack)
-        && playerState.currentTrack
-        && playerState.status !== "loading"
-      ) {
-        event.preventDefault();
-        void playerController.skipToPrevious();
-        return;
-      }
-
-      if (
-        eventMatchesShortcut(event, keyboardShortcuts.nextTrack)
-        && playerState.currentTrack
-        && playerState.status !== "loading"
-      ) {
-        event.preventDefault();
-        void playerController.skipToNext();
-      }
-    };
-
-    window.addEventListener("keydown", handleShortcut, true);
-    return () => window.removeEventListener("keydown", handleShortcut, true);
-  }, [
-    activeTab?.view,
-    activeTabId,
-    canNavigateBack,
-    canNavigateForward,
-    handleNavigateBack,
-    handleNavigateForward,
-    isSearchOpen,
-    keyboardShortcuts,
-    nextTabId,
-    onboardingStep,
-    playerState.currentTrack,
-    playerState.status,
-    tabs,
-  ]);
+    const listener = (event: KeyboardEvent) => handleShortcut(event);
+    window.addEventListener("keydown", listener, true);
+    return () => window.removeEventListener("keydown", listener, true);
+  }, []);
 
 
   const handlePlayerBarClick=()=>{
@@ -1987,10 +1971,14 @@ useEffect(() => {
 
       Both drop out under OS native decorations: the WM already draws a real frame above the
       webview there, so this edge would just be a stray line under the OS title bar.
+      The "Window outline" setting can also turn it off for desktops where it reads as a
+      white border rather than an edge.
     */}
     <div
       className={`relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ${
-        nativeWindowControls ? "" : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
+        nativeWindowControls || !windowOutline
+          ? ""
+          : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
       }`}
     >
  {/*    {!paperPcMode && <StarField />}
