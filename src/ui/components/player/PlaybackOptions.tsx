@@ -6,6 +6,7 @@ import { playerController } from "../../../player/playerStore";
 import { FloatingPanel } from "../FloatingPanel";
 import { MiniEqualizer } from "./MiniEqualizer";
 import { isEqualizerFlat, useEqualizer, useEqualizerEnabled } from "../../settings/equalizer";
+import { useAudioEngineMode } from "../../settings/audioEngine";
 
 /** Offered speeds. Wider than a podcast app needs, narrow enough to stay a single row. */
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
@@ -27,6 +28,8 @@ const formatCountdown = (remainingMs: number) => formatMinutesSeconds(Math.ceil(
 export function PlaybackOptions() {
   const [isOpen, setIsOpen] = useState(false);
   const [rate, setRate] = useState(() => playerController.getPlaybackRate());
+  const [pitch, setPitch] = useState(() => playerController.getPitch());
+  const canShiftPitch = useAudioEngineMode() === "rust";
   const [remainingMs, setRemainingMs] = useState<number | null>(
     () => playerController.getSleepTimerRemainingMs(),
   );
@@ -58,6 +61,11 @@ export function PlaybackOptions() {
     setRate(playerController.getPlaybackRate());
   };
 
+  const applyPitch = (next: number) => {
+    playerController.setPitch(next);
+    setPitch(playerController.getPitch());
+  };
+
   const applySleep = (minutes: number | null) => {
     playerController.setSleepTimer(minutes);
     setRemainingMs(playerController.getSleepTimerRemainingMs());
@@ -81,7 +89,7 @@ export function PlaybackOptions() {
             className={cn(
               "flex h-8 items-center justify-center gap-1 rounded-full px-2 text-muted-foreground transition-colors",
               "hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              (isSleeping || rate !== 1 || equalizerActive) && "text-primary",
+              (isSleeping || rate !== 1 || pitch !== 0 || equalizerActive) && "text-primary",
             )}
           >
             {isSleeping ? (
@@ -122,6 +130,35 @@ export function PlaybackOptions() {
             ))}
           </div>
         </div>
+
+        {canShiftPitch && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-medium text-foreground" id="pitch-label">Pitch</span>
+            <div className="flex items-center rounded-lg bg-card p-0.5" role="group" aria-labelledby="pitch-label">
+              {[
+                { step: -1, label: "−", name: "Lower pitch a semitone" },
+                { step: 0, label: pitch === 0 ? "0" : `${pitch > 0 ? "+" : ""}${pitch}`, name: "Reset pitch" },
+                { step: 1, label: "+", name: "Raise pitch a semitone" },
+              ].map(({ step, label, name }) => (
+                <button
+                  key={step}
+                  type="button"
+                  aria-label={name}
+                  disabled={step === 0 ? pitch === 0 : Math.abs(pitch + step) > 12}
+                  onClick={() => applyPitch(step === 0 ? 0 : pitch + step)}
+                  className={cn(
+                    "min-w-8 rounded-md px-2 py-1 text-[11px] font-medium tabular-nums transition-colors",
+                    "text-muted-foreground hover:text-foreground disabled:pointer-events-none",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                    step === 0 && pitch !== 0 && "text-primary",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1.5 border-t border-border pt-3">
           <div className="flex items-baseline justify-between gap-2">

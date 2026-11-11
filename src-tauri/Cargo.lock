@@ -769,7 +769,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1951,7 +1951,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -3784,6 +3784,15 @@ dependencies = [
  "num-rational",
  "symphonia",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "rodio-wsola"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7a9846f28f3dec5c369fa0bf68bfa35bff5017d71bcd52fd7f864df948ded73"
+dependencies = [
+ "rodio",
 ]
 
 [[package]]
@@ -6898,6 +6907,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rodio",
+ "rodio-wsola",
  "rustls",
  "rustls-native-certs",
  "serde",
