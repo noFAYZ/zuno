@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { logInternalWarn } from "../internal/logging";
 import type { RustAudioSource } from "../datasource/types";
+import { getLoudness } from "./loudness";
 
 export type { RustAudioSource };
 
@@ -90,6 +91,7 @@ export async function load(
     source,
     durationSec: fallbackDurationSec,
     standby,
+    loudnessDb: getLoudness(trackId) ?? null,
   });
   if (!standby) {
     positionTrackId = trackId;

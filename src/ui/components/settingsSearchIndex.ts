@@ -18,6 +18,7 @@ const ENTRIES: SettingsSearchEntry[] = [
   { tab: "appearance", category: "Appearance", title: "Onboarding", description: "Restart the first-run introduction." },
   { tab: "appearance", category: "Appearance", title: "Made for you", description: "Show personalized recommendations on Home." },
   { tab: "playback", category: "Playback", title: "Output device", description: "Choose where Zuno sends audio." },
+  { tab: "playback", category: "Playback", title: "Normalize volume", description: "Play every track at a similar loudness." },
   { tab: "playback", category: "Playback", title: "Equalizer", description: "Adjust audio frequencies and presets." },
   { tab: "playback", category: "Playback", title: "Gapless playback", description: "Remove silence between tracks." },
   { tab: "playback", category: "Playback", title: "Crossfade", description: "Blend the end of one track into the next." },

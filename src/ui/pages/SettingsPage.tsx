@@ -112,6 +112,7 @@ import {
   setLyricsFontScale,
   useLyricsFontScale,
 } from "../settings/lyricsFontScale";
+import { setVolumeNormalization, useVolumeNormalization } from "../settings/volumeNormalization";
 import {
   TRANSLATION_LANGUAGES,
   TRANSLATION_OFF,
@@ -639,6 +640,7 @@ export function SettingsPage({
   const youtubeScrobbling = useYouTubeScrobbling();
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
+  const volumeNormalization = useVolumeNormalization();
   const lyricsTranslationLang = useLyricsTranslationLang();
   const madeForYouVisible = useMadeForYouVisible();
   const crossfadeSec = useCrossfadeSec();
@@ -2138,6 +2140,18 @@ export function SettingsPage({
               titleId="playback-settings-title"
               icon={<PlayIcon size={18} aria-hidden="true" />}
               description="How one track becomes the next."
+            />
+
+            <SettingToggle
+              title="Normalize volume"
+              description={
+                audioEngineMode === "rust"
+                  ? "Turns loud tracks down to YouTube's reference level, so a playlist plays at one volume."
+                  : "Needs the Rust audio engine. The YouTube player already levels volume on its own."
+              }
+              checked={volumeNormalization}
+              onCheckedChange={setVolumeNormalization}
+              disabled={audioEngineMode !== "rust"}
             />
 
             <SettingToggle

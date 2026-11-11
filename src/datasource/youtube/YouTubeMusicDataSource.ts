@@ -57,6 +57,7 @@ import {
 import { getPreferredLyricsSourceId } from "../../internal/lyricsSourcePreference";
 import { isVideoId, looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
+import { rememberLoudness } from "../../player/loudness";
 import {
   getDownloadQuality,
   getStreamingQuality,
@@ -5750,6 +5751,10 @@ export class YouTubeMusicDataSource extends DataSource {
 
           streamUrl = decipheredUrl;
           streamMimeType = (format as any).mime_type ?? "audio/mp4";
+          rememberLoudness(
+            track.id,
+            (format as any).loudness_db ?? (info as any).player_config?.audio_config?.loudness_db,
+          );
           logInternalInfo("YouTubeMusicDataSource.getStreamData format selected", {
             trackId: track.id,
             client: label,
