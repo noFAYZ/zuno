@@ -35,5 +35,4 @@ check(
 check(!isEmbedRestrictedPlaybackError("YouTube player error 150"), "non-Error values don't match");
 check(!isEmbedRestrictedPlaybackError(null), "null doesn't throw or match");
 
-// eslint-disable-next-line no-console
 console.log("AudioEngine.check.ts passed");

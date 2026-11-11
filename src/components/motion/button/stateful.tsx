@@ -31,20 +31,17 @@ export interface StatefulButtonProps extends Omit<ButtonProps, "children"> {
 }
 
 const CASCADE_STAGGER = 0.025;
-const ROLL_BLUR = "blur(6px)";
 
 const CASCADE_LETTER_VARIANTS: Variants = {
-  initial: { opacity: 0, y: "105%", filter: ROLL_BLUR },
+  initial: { opacity: 0, y: "105%" },
   animate: (delay: number = 0) => ({
     opacity: 1,
     y: "0%",
-    filter: "blur(0px)",
     transition: { ...SPRING_SWAP, delay },
   }),
   exit: (delay: number = 0) => ({
     opacity: 0,
     y: "-105%",
-    filter: ROLL_BLUR,
     transition: { duration: 0.16, ease: EASE_OUT, delay: delay * 0.5 },
   }),
 };
@@ -52,19 +49,17 @@ const CASCADE_LETTER_VARIANTS: Variants = {
 const ICON_VARIANTS: Variants = {
   // Width collapses too, so the icon adds/removes its own space smoothly
   // instead of popping the row width in a single frame.
-  initial: { opacity: 0, width: 0, scale: 0.7, filter: ROLL_BLUR },
+  initial: { opacity: 0, width: 0, scale: 0.7 },
   animate: {
     opacity: 1,
     width: "1.5rem",
     scale: 1,
-    filter: "blur(0px)",
     transition: SPRING_SWAP,
   },
   exit: {
     opacity: 0,
     width: 0,
     scale: 0.7,
-    filter: ROLL_BLUR,
     transition: { duration: 0.16, ease: EASE_OUT },
   },
 };
@@ -102,6 +97,8 @@ function TextSlot({
   // Measure strings with the same per-letter layout as the cascade. Measuring
   // the whole string preserves kerning, which can make it narrower than the
   // inline-block letters and clip the final glyph during the width animation.
+  // Every render on purpose: any child change can change the width; the guard below stops a loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const nextWidth = measureRef.current?.offsetWidth;
     if (!nextWidth) return;
@@ -151,7 +148,7 @@ function TextSlot({
                   key={index}
                   custom={index * CASCADE_STAGGER}
                   variants={CASCADE_LETTER_VARIANTS}
-                  className="inline-block whitespace-pre will-change-[opacity,filter,transform]"
+                  className="inline-block whitespace-pre will-change-[opacity,transform]"
                 >
                   {char}
                 </motion.span>
@@ -163,11 +160,11 @@ function TextSlot({
         <AnimatePresence initial={false}>
           <motion.span
             key={`text-${value}`}
-            initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14, filter: ROLL_BLUR }}
-            animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -14, filter: ROLL_BLUR }}
+            initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
+            animate={reduce ? { opacity: 1 } : { opacity: 1, y: 0 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -14 }}
             transition={reduce ? { duration: 0.15 } : SPRING_SWAP}
-            className="absolute left-0 top-0 inline-block will-change-[opacity,filter,transform]"
+            className="absolute left-0 top-0 inline-block will-change-[opacity,transform]"
           >
             {children}
           </motion.span>

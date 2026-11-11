@@ -190,6 +190,11 @@ export function ArtistView({
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
   }, []);
 
+  // Before the early return, so the hook count never changes between renders.
+  const trackIds = useMemo(
+    () => new Set((page?.allSongs ?? []).map((track) => track.id)),
+    [page],
+  );
   if (!artist || !displayedArtist) return null;
 
   const showToast = (message: string) => {
@@ -198,10 +203,6 @@ export function ArtistView({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
   };
 
-  const trackIds = useMemo(
-    () => new Set((page?.allSongs ?? []).map((track) => track.id)),
-    [page],
-  );
   const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
 
   const togglePlayCollection = () => {
