@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Track } from "../datasource/types";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
-import { getAppSetting, setAppSetting } from "../internal/appSettings";
+import { getAppSetting, getInvokeErrorMessage, setAppSetting } from "../internal/appSettings";
 import { getDownloadQuality, type AudioQuality } from "../internal/audioQuality";
 import { artworkIdentity, getArtworkUrlCandidates } from "../datasource/youtube/artwork";
 import { isOnline, onReconnect, useOnline } from "../internal/connectivity";
@@ -44,7 +44,8 @@ export interface OfflineState {
   /** Track ids waiting their turn, in order. */
   queued: string[];
   /**
-   * Metadata for everything queued or downloading.
+   * Metadata for everything queued, downloading or failed — a failed row needs its track to
+   * render and to retry.
    *
    * Held in state rather than only in the worker's map because the Downloads list and the
    * player bar both need to render a song that has no file yet — an id alone cannot be shown.
@@ -217,7 +218,8 @@ export function startOfflineProgressFeed(): void {
 
 export function getOfflineStatus(trackId: string): OfflineStatus {
   if (state.entries[trackId]) return "ready";
-  if (state.downloadingId === trackId) return "downloading";
+  // A download cancelled mid-transfer is still `downloadingId` until it lands and is discarded.
+  if (state.downloadingId === trackId && state.pending[trackId]) return "downloading";
   if (state.queued.includes(trackId)) return "queued";
   if (state.failed[trackId]) return "failed";
   return "absent";
@@ -350,7 +352,12 @@ export function setOfflineStreamResolver(resolver: StreamUrlResolver): void {
 export function queueDownload(track: Track): void {
   if (track.source === "local") return;
   if (state.entries[track.id] || state.queued.includes(track.id)) return;
-  if (state.downloadingId === track.id) return;
+  if (state.downloadingId === track.id) {
+    // Asked for again after a cancel, while still in flight: keep it rather than discard it.
+    pendingTracks.set(track.id, track);
+    setState({ pending: { ...state.pending, [track.id]: track } });
+    return;
+  }
 
   const { [track.id]: _cleared, ...failed } = state.failed;
   setState({
@@ -366,10 +373,18 @@ export function queueDownloads(tracks: Track[]): void {
   for (const track of tracks) queueDownload(track);
 }
 
+/** Drops a track from the download list: queued, in flight, or failed. */
 export function cancelDownload(trackId: string): void {
   pendingTracks.delete(trackId);
   const { [trackId]: _dropped, ...pending } = state.pending;
-  setState({ queued: state.queued.filter((id) => id !== trackId), pending });
+  const { [trackId]: _dismissed, ...failed } = state.failed;
+  setState({ queued: state.queued.filter((id) => id !== trackId), pending, failed });
+}
+
+/** Re-queues a failed download from the metadata its failure kept. */
+export function retryDownload(trackId: string): void {
+  const track = state.pending[trackId];
+  if (track && state.failed[trackId]) queueDownload(track);
 }
 
 export async function removeDownload(trackId: string): Promise<void> {
@@ -438,6 +453,12 @@ async function pump(): Promise<void> {
         logInternalInfo("offlineStore.download start", { trackId, title: track.title });
         const { url, mimeType, cookie } = await resolveStreamUrl(track, getDownloadQuality());
         const byteLength = await invoke<number>("offline_audio_save", { url, trackId, cookie });
+        // ponytail: the transfer cannot be aborted, so a cancel lands and is deleted; add a cancel token to `offline_audio_save` if that waste matters.
+        if (!pendingTracks.has(trackId)) {
+          await invoke("offline_audio_remove", { trackId }).catch(() => {});
+          setState({ downloadingId: null, progress: null });
+          continue;
+        }
         logInternalInfo("offlineStore.download complete", { trackId, byteLength });
         const hasArtwork = await saveArtwork(track);
         pendingTracks.delete(trackId);
@@ -462,16 +483,15 @@ async function pump(): Promise<void> {
           setState({ queued: [trackId, ...state.queued], downloadingId: null, progress: null });
           break;
         }
+        const cancelled = !pendingTracks.has(trackId);
         pendingTracks.delete(trackId);
-        const { [trackId]: _failed, ...pending } = state.pending;
-        const message = error instanceof Error ? error.message : String(error);
+        if (cancelled) {
+          setState({ downloadingId: null, progress: null });
+          continue;
+        }
+        const message = getInvokeErrorMessage(error);
         logInternalError("offlineStore.download failed", error, { trackId });
-        setState({
-          downloadingId: null,
-          progress: null,
-          pending,
-          failed: { ...state.failed, [trackId]: message },
-        });
+        setState({ downloadingId: null, progress: null, failed: { ...state.failed, [trackId]: message } });
       }
     }
   } finally {
@@ -509,6 +529,29 @@ onReconnect(() => {
 function subscribe(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+export interface DownloadList {
+  /** Null while nothing transfers, or when the transfer was cancelled and is being discarded. */
+  active: Track | null;
+  queued: Track[];
+  failed: Array<{ track: Track; message: string }>;
+  /** Newest first. */
+  recent: OfflineEntry[];
+}
+
+export function selectDownloadList(state: OfflineState, recentLimit: number): DownloadList {
+  const { downloadingId, pending } = state;
+  return {
+    active: (downloadingId && pending[downloadingId]) || null,
+    queued: state.queued.flatMap((id) => (id !== downloadingId && pending[id] ? [pending[id]] : [])),
+    failed: Object.entries(state.failed).flatMap(([id, message]) =>
+      pending[id] ? [{ track: pending[id], message }] : [],
+    ),
+    recent: Object.values(state.entries)
+      .sort((left, right) => right.downloadedAt - left.downloadedAt)
+      .slice(0, recentLimit),
+  };
 }
 
 export function getOfflineState(): OfflineState {
