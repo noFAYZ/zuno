@@ -9,6 +9,7 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
+import { BlurredArtwork } from "../BlurredArtwork";
 import { cn } from "@/lib/utils";
 import { emit } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
@@ -832,12 +833,9 @@ export default function MiniPlayer() {
           never do. Deliberately weak so white text keeps its contrast.
         */}
         {artworkUrl ? (
-          <span
-            key={artworkUrl}
-            className="pointer-events-none absolute inset-0 -z-10 scale-150 bg-cover bg-center opacity-30 blur-2xl"
-            style={{ backgroundImage: `url("${artworkUrl}")` }}
-            aria-hidden="true"
-          />
+          <span key={artworkUrl} className="pointer-events-none absolute inset-0 -z-10 scale-150 opacity-30" aria-hidden="true">
+            <BlurredArtwork artworkUrl={artworkUrl} className="size-full" />
+          </span>
         ) : null}
 
         {/* Specular top edge — the highlight a real glass material catches. */}

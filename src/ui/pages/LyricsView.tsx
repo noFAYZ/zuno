@@ -4,6 +4,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -25,6 +26,7 @@ import { playerController, shallowEqual, usePlayerSelector } from "../../player/
 import { playerUIStore, usePlayerUIState } from "../stores/playerUIStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
+import { BlurredArtwork } from "../components/BlurredArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 import { OFFSET_STEP_SEC, setLyricsOffset, useLyricsOffset } from "../settings/lyricsOffset";
 import { useLyricsFontScale } from "../settings/lyricsFontScale";
@@ -171,6 +173,8 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     return () => {
       cancelled = true;
     };
+    // Keyed on the id: a re-created track object for the same song must not refetch and flicker.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track?.id, reloadToken, manualQuery]);
 
   /*
@@ -180,14 +184,15 @@ export function LyricsView({ onClose }: LyricsViewProps) {
    * exactly once per reconnect rather than in a loop.
    */
   const wasOnlineRef = useRef(isOnline);
+  const retryAfterReconnect = useEffectEvent(() => {
+    if (!isLoading && !hasLines && track) setReloadToken((token) => token + 1);
+  });
   useEffect(() => {
     const wasOnline = wasOnlineRef.current;
     wasOnlineRef.current = isOnline;
     // The offline → online edge only. On the level it would also be true on mount, firing a
     // second fetch on top of the one the effect above has already started.
-    if (!isOnline || wasOnline) return;
-    if (isLoading || hasLines || !track) return;
-    setReloadToken((token) => token + 1);
+    if (isOnline && !wasOnline) retryAfterReconnect();
   }, [isOnline]);
 
   /*
@@ -307,6 +312,8 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     return () => {
       cancelled = true;
     };
+    // Keyed on the lyrics and the id; `lines`/`hasLines` derive from `lyrics`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lyrics, translationLang, track?.id]);
 
   // A fresh song starts at the top, whether or not it turned out to be synced.
@@ -426,34 +433,16 @@ export function LyricsView({ onClose }: LyricsViewProps) {
       className="@container/lyrics relative flex h-full min-h-0 w-full flex-col overflow-hidden"
       aria-label="Lyrics"
     >
-      {/*
-        The cover, oversized and blurred past recognition, is the only colour on the screen.
-        Sized at the smallest variant deliberately: nothing above 120px survives the blur, so a
-        larger source would cost texture memory and show nothing.
-
-        The radius is 32px, not 70px. This is the most expensive single element in the app: a
-        136%-of-window box, so ~2600x1470 on a 1080p display, which is a 15 MB layer before the
-        filter has done anything — and blur cost scales with radius, because Chromium runs more
-        downsample passes and allocates intermediates expanded by it.
-
-        70px was buying almost nothing. The source is a 120px image stretched roughly twenty
-        times, so one source pixel already covers ~20 display pixels and the upscale is doing
-        the softening; 70px of filter was ~3.5 source pixels of extra blur on top of that.
-        32px is the radius `Layout` settled on for the same trick at the same upscale, for the
-        same reason. Toggle Settings > Potato PC > Manage > "Blur and colour filters" to see
-        the whole class of effect on and off.
-      */}
+      {/* The cover, oversized and blurred once into a canvas (see BlurredArtwork), is the only
+          colour on the screen; the drift then moves a plain texture, which the compositor does cheaply. */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
         {track?.artworkUrl && (
           <div
             key={track.artworkUrl}
             data-fx="ambient"
-            className={cn(
-              "absolute -inset-[18%] opacity-50 blur-[32px] saturate-[1.7] rounded-none",
-              !reduce && "lyrics-drift",
-            )}
+            className={cn("absolute -inset-[18%] opacity-50", !reduce && "lyrics-drift")}
           >
-            <TrackArtwork className="size-full rounded-none" size={120} artworkUrl={track.artworkUrl} iconSize={0} />
+            <BlurredArtwork artworkUrl={track.artworkUrl} className="size-full" />
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-background/75 via-background/88 to-background" />

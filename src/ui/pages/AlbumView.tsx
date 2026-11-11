@@ -124,10 +124,11 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     return () => window.removeEventListener("keydown", handlePageSearchKeyDown);
   }, [album, error, isLoading, keyboardShortcuts, tracks.length]);
 
+  // Every hook runs before the early return: a hook after it changes the hook count between renders.
+  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
+  const selection = useTrackSelection(visibleTracks);
   if (!album) return null;
 
-
-  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
   const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
 
   const togglePlayCollection = () => {
@@ -147,8 +148,6 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
    * Order is set before playback starts, not after: playTrackById resolves asynchronously,
    * and a mode applied afterwards can lose a race with a track that ends almost immediately.
    */
-  const selection = useTrackSelection(visibleTracks);
-
   const playInLoop = () => {
     const firstTrack = tracks[0];
     if (!firstTrack) return;

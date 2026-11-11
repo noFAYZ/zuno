@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn sniffing_rewinds_the_reader() {
         let mut body = vec![0x1A, 0x45, 0xDF, 0xA3];
-        body.extend(std::iter::repeat(0xAB).take(200));
+        body.extend(std::iter::repeat_n(0xAB, 200));
         let mut cursor = std::io::Cursor::new(body);
 
         let sniffed = sniff_container_mime(&mut cursor).expect("sniff");
