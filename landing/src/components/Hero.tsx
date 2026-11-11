@@ -8,6 +8,7 @@ import { GITHUB_REPO, RELEASES_URL, timeAgo, type LatestRelease, type PlatformId
 
 const PLATFORM_LABEL: Record<PlatformId, string> = {
   windows: "Windows",
+  "windows-arm64": "Windows ARM64",
   "macos-arm": "macOS",
   "macos-intel": "macOS",
   linux: "Linux",

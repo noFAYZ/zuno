@@ -2,7 +2,7 @@ export const GITHUB_REPO = "https://github.com/noFAYZ/zuno";
 export const RELEASES_URL = `${GITHUB_REPO}/releases/latest`;
 const LATEST_RELEASE_API = "https://api.github.com/repos/noFAYZ/zuno/releases/latest";
 
-export type PlatformId = "windows" | "macos-arm" | "macos-intel" | "linux";
+export type PlatformId = "windows" | "windows-arm64" | "macos-arm" | "macos-intel" | "linux";
 
 export interface PlatformBuild {
   id: PlatformId;
@@ -25,7 +25,13 @@ export const PLATFORM_BUILDS: readonly PlatformBuild[] = [
     id: "windows",
     label: "Windows",
     hint: "Installer · 10 and 11",
-    patterns: [/-setup\.exe$/i, /\.msi$/i],
+    patterns: [/_x64-setup\.exe$/i, /_x64[^/]*\.msi$/i],
+  },
+  {
+    id: "windows-arm64",
+    label: "Windows ARM64",
+    hint: "Installer · 10 and 11",
+    patterns: [/_arm64-setup\.exe$/i, /_arm64[^/]*\.msi$/i],
   },
   {
     id: "macos-arm",

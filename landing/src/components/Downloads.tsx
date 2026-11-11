@@ -27,10 +27,11 @@ const TILES: readonly OsTile[] = [
     id: "windows",
     name: "Windows",
     detects: ["windows"],
-    requirement: "Windows 10 and 11 · 64-bit",
+    requirement: "Windows 10 and 11 · x64 and ARM64",
     variants: [
-      { label: "Installer", platform: "windows", match: /-setup\.exe$/i },
-      { label: "MSI", platform: "windows", match: /\.msi$/i },
+      { label: "x64", platform: "windows", match: /-setup\.exe$/i },
+      { label: "x64 MSI", platform: "windows", match: /\.msi$/i },
+      { label: "ARM64", platform: "windows-arm64" },
     ],
   },
   {
