@@ -14,6 +14,7 @@ import { findPlayableIndex } from "./playableIndex";
 import { hasPreloadDeck } from "./preloadDeck";
 import { getAudioEngineMode } from "../ui/settings/audioEngine";
 import { DiscordRpcService } from "./DiscordRPC";
+import { getInvokeErrorMessage } from "../internal/appSettings";
 import {
   MAX_CROSSFADE_SEC,
   readPlaybackSettings,
@@ -100,15 +101,6 @@ type Listener = () => void;
 const DISCORD_ASSET_URL_LIMIT = 256;
 /** How long the sleep timer spends fading out before it pauses. */
 const SLEEP_FADE_MS = 20_000;
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
-  }
-  return String(error);
-}
 
 /** A session saved before shuffle split out stored it as the order mode. */
 function wasLegacyShuffleMode(mode: unknown): boolean {
@@ -1382,7 +1374,7 @@ export class PlayerController {
         if (canFallBackToIframe) {
           logInternalWarn("PlayerController.ensureTrackLoaded falling back to the YouTube player", {
             trackId: track.id,
-            error: getErrorMessage(error),
+            error: getInvokeErrorMessage(error),
           });
           await this.audioEngine.loadIframeFallback(track.id);
         } else if (canFallBackToNative && isEmbedRestrictedPlaybackError(error)) {
@@ -1390,7 +1382,7 @@ export class PlayerController {
           if (!nativeAudioData) throw error;
           logInternalWarn("PlayerController.ensureTrackLoaded falling back to native audio", {
             trackId: track.id,
-            error: getErrorMessage(error),
+            error: getInvokeErrorMessage(error),
           });
           await this.audioEngine.loadNativeFallback(
             track.id,
@@ -1423,7 +1415,7 @@ export class PlayerController {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
       });
-      const detail = getErrorMessage(error);
+      const detail = getInvokeErrorMessage(error);
       if (track.source === "local" || this.audioEngine.usesNativeAudio()) {
         throw new Error(`Unable to load audio data for playback. ${detail}`);
       }
@@ -1686,7 +1678,7 @@ export class PlayerController {
       status: this.state.status,
       trackId: this.state.currentTrack?.id,
     });
-    const detail = getErrorMessage(error);
+    const detail = getInvokeErrorMessage(error);
     const track = this.state.currentTrack;
     const offlineMiss = !isOnline() && track && !isPlayableOffline(track);
 
