@@ -1058,8 +1058,7 @@ export default function App() {
   const handleCreateTab = () => createTab();
 
   const handleSignIn = async () => {
-    await libraryController.signIn();
-    if (libraryController.getState().status !== "ready") return;
+    if (!(await libraryController.signIn())) return;
 
     playerUIStore.setLyricsOpen(false);
     const newId = nextTabId.toString();
