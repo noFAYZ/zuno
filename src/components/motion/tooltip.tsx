@@ -15,6 +15,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -39,6 +40,8 @@ export interface TooltipProps {
 
 // Gap between trigger and tooltip, in px.
 const GAP = 8;
+// Closest a tooltip may sit to the window edge, in px.
+const VIEWPORT_MARGIN = 8;
 
 // Centering transform for the fixed-positioned anchor point, per side.
 const anchorTransform: Record<Side, string> = {
@@ -119,6 +122,8 @@ export function Tooltip({
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(
     null,
   );
+  const [shift, setShift] = useState(0);
+  const floatingRef = useRef<HTMLSpanElement>(null);
   const id = useId();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anchorRef = useRef<HTMLSpanElement>(null);
@@ -141,7 +146,19 @@ export function Tooltip({
       right: { top: cy, left: r.right + GAP },
     };
     setCoords(point[side]);
+    setShift(0);
   }, [side]);
+
+  // Centred on a trigger near the window edge, a tooltip ran off-screen (#183); nudged back before paint.
+  useLayoutEffect(() => {
+    const rect = floatingRef.current?.getBoundingClientRect();
+    if (!open || !rect) return;
+    const left = rect.left - shift;
+    const right = rect.right - shift;
+    const maxRight = window.innerWidth - VIEWPORT_MARGIN;
+    const next = right > maxRight ? maxRight - right : left < VIEWPORT_MARGIN ? VIEWPORT_MARGIN - left : 0;
+    if (next !== shift) setShift(next);
+  }, [open, coords, shift]);
 
   const show = useCallback(() => {
     if (!canHover) return;
@@ -209,12 +226,13 @@ export function Tooltip({
             <AnimatePresence>
               {open && coords ? (
                 <span
+                  ref={floatingRef}
                   aria-hidden
                   className="pointer-events-none fixed z-[9999]"
                   style={{
                     top: coords.top,
                     left: coords.left,
-                    transform: anchorTransform[side],
+                    transform: `${anchorTransform[side]} translateX(${shift}px)`,
                   }}
                 >
                   <motion.span

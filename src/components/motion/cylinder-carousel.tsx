@@ -161,6 +161,11 @@ function CarouselBall({
     const valley = arc * (0.5 - t * t);
     return convex ? -valley : valley;
   });
+  // The biggest ball paints on top; without it DOM order decided, and later balls covered the center (#183).
+  const zIndex = useTransform(offset, (o) => {
+    const distance = Math.round(Math.abs(o) * 10);
+    return convex ? 1000 - distance : distance;
+  });
   // Fully off-stage balls stop painting (matters for canvas/shader children).
   const visibility = useTransform(x, (px) =>
     Math.abs(px) > halfWidth + itemSize ? "hidden" : "visible",
@@ -174,6 +179,7 @@ function CarouselBall({
         x,
         y,
         scale,
+        zIndex,
         visibility,
         width: itemSize,
         height: itemSize,

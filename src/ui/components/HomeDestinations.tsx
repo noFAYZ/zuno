@@ -95,25 +95,16 @@ export function HomeDestinations({
             whileTap={{ scale: 0.98 }}
             transition={{ type: "spring", stiffness: 520, damping: 34 }}
             className={cn(
-              // `pl-12` is the stamp's gutter: it ends at 36px, so the text clears it by 12px.
-              "group/dest relative flex items-center overflow-hidden rounded-xl bg-card/80 p-3 pl-12 text-left border border-border",
+              // `pl-12` is the icon's gutter: it ends at 38px, so the text clears it by 10px.
+              "group/dest relative flex items-center overflow-hidden rounded-xl bg-card/80 p-3 pl-12 text-left",
               "transition-colors hover:bg-card",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
-            {/*
-              Stamped rather than sat in a chip, and cropped only on the left — an icon clipped
-              on three sides reads as an accident rather than a decision.
-            */}
+            {/* Whole, not cropped at the edge: a half-hidden icon read as a layout bug (#183). */}
             <card.icon
-              size={38}
-              /*
-               * Optical compensation. 1.5 is tuned for a 20px glyph; at 48px the same value is
-               * proportionally a third as heavy and the icon reads as wire. Scaling the stroke
-               * with the size is what keeps the weight looking constant.
-               */
-              strokeWidth={1.85}
-              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-gray-300 transition-colors group-hover/dest:text-red-400"
+              size={24}
+              className="pointer-events-none absolute left-3.5 top-1/2 shrink-0 -translate-y-1/2 text-muted-foreground transition-colors group-hover/dest:text-primary"
               aria-hidden="true"
             />
 
