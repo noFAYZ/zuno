@@ -76,13 +76,9 @@ import {
   setLiveCookie,
   tauriFetch,
 } from "./tauriFetch";
+import { decodeFrame } from "../../internal/ipcFrame";
 
 type ClientLabel = "music" | "web" | "download";
-type NativeAudioPayload = {
-  bodyBase64: string;
-  mimeType: string;
-};
-
 type NativeAudioSourcePayload = {
   url: string;
   mimeType: string;
@@ -99,15 +95,6 @@ type MusicColumn = {
     }>;
   };
 };
-
-function decodeBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
 
 type MusicItem = {
   id?: string;
@@ -6270,20 +6257,13 @@ export class YouTubeMusicDataSource extends DataSource {
       if (!track.localPath) {
         throw new Error("Local track path is missing.");
       }
-      const payload = await invoke<NativeAudioPayload>("local_audio_read", {
-        path: track.localPath,
-      });
-      const audioBytes = decodeBase64(payload.bodyBase64);
-      if (audioBytes.byteLength === 0) {
+      const { meta, body } = decodeFrame<{ mimeType: string }>(
+        await invoke<ArrayBuffer>("local_audio_read", { path: track.localPath }),
+      );
+      if (body.byteLength === 0) {
         throw new Error("Local audio file returned no data.");
       }
-      return {
-        bytes: audioBytes.buffer.slice(
-          audioBytes.byteOffset,
-          audioBytes.byteOffset + audioBytes.byteLength,
-        ) as ArrayBuffer,
-        mimeType: payload.mimeType,
-      };
+      return { bytes: body.slice().buffer, mimeType: meta.mimeType };
     }
 
     /*

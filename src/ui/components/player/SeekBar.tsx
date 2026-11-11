@@ -32,7 +32,8 @@ const SEEK_SLIDER = [
  * 0.2s caps the player bar at ~5 renders/second instead of 60.
  */
 const TIME_COMMIT_THRESHOLD_S = 0.2;
-/** Poll period when playback is not advancing — see the frame loop below. */
+const PLAYING_POLL_MS = (TIME_COMMIT_THRESHOLD_S * 1000) / 2;
+/** Poll period when playback is not advancing. */
 const IDLE_POLL_MS = 250;
 
 const formatTime = formatMinutesSeconds;
@@ -101,18 +102,8 @@ export function SeekBar() {
 
   useEffect(() => () => cancelSeekAnimation(), []);
 
-  /*
-   * Poll the engine on a frame loop, but only commit to state when the value moved enough to
-   * be visible. This used to setState on every frame, re-rendering the whole player bar 60
-   * times a second for a readout that shows whole seconds and a bar where one pixel is
-   * roughly a quarter of a second — about 55 of those 60 renders painted an identical frame.
-   *
-   * The loop itself stays at rAF so a seek still lands on the very next frame; it is the
-   * commit that is gated. Seeks and drags bypass this entirely — they call setDisplayedTime
-   * directly, so they remain frame-accurate.
-   */
+  // Poll the engine, committing to state only when the value moved enough to be visible.
   useEffect(() => {
-    let animationFrameId = 0;
     const tick = () => {
       if (!uiState.isSeeking) {
         const engineTime = playerController.getCurrentTime();
@@ -139,34 +130,11 @@ export function SeekBar() {
       }
     };
 
-    /*
-     * Frame-rate only while the time is actually moving.
-     *
-     * The loop used to run for the life of the component: paused, idle, errored, on a track
-     * that had ended — sixty wake-ups a second asking the engine for a number that could not
-     * have changed. Playback still gets rAF so a seek lands on the very next frame.
-     *
-     * Everything else drops to 250ms rather than stopping outright. Polling is what reconciles
-     * a seek the engine has not reported yet and a duration that arrives after the track does,
-     * and both of those happen while paused; a one-shot pass would have to re-implement that
-     * reconciliation, where a slower poll just keeps it, at 4 wake-ups a second instead of 60.
-     */
-    let intervalId = 0;
-    if (state.status === "playing") {
-      const loop = () => {
-        tick();
-        animationFrameId = requestAnimationFrame(loop);
-      };
-      animationFrameId = requestAnimationFrame(loop);
-    } else {
-      tick();
-      intervalId = window.setInterval(tick, IDLE_POLL_MS);
-    }
-
-    return () => {
-      cancelAnimationFrame(animationFrameId);
-      window.clearInterval(intervalId);
-    };
+    // Twice per commit threshold, so timer jitter cannot skip a commit; per-frame polling only
+    // woke the CPU. Seeks and drags bypass this and stay frame-accurate.
+    tick();
+    const intervalId = window.setInterval(tick, state.status === "playing" ? PLAYING_POLL_MS : IDLE_POLL_MS);
+    return () => window.clearInterval(intervalId);
   }, [uiState.isSeeking, state.status]);
 
   const handleSeekStart = (event: React.PointerEvent<HTMLInputElement>) => {

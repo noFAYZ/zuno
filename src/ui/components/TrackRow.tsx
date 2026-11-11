@@ -12,14 +12,14 @@ import { Tooltip } from "@/components/motion/tooltip";
 import { CheckActiveIcon, CheckIcon, DislikeActiveIcon, DislikeIcon, DownloadIcon, HeartActiveIcon, HeartIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
 import { Loader, MusicVisualizer } from "@/components/motion/loader";
 import {
-  getOfflineStatus,
   useUnavailableOffline,
   queueDownload,
   removeDownload,
-  useOfflineState,
+  useOfflineProgress,
+  useOfflineStatus,
 } from "../../player/offlineStore";
 import type { Track, TrackRating } from "../../datasource/types";
-import { libraryController, useLibraryState } from "../../player/playerStore";
+import { libraryController, useLibrarySelector } from "../../player/playerStore";
 import { useTrackContextMenu } from "./TrackContextMenu";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
@@ -82,11 +82,14 @@ interface TrackRowProps extends PassthroughButtonProps {
  * Unlike the other hover actions this one stays visible once a track is downloaded — that is
  * state you need to see without hovering, the same reasoning as the queue's stop marker.
  */
+function DownloadProgress({ title }: { title: string }) {
+  const progress = useOfflineProgress();
+  return <Loader variant="percent" size={18} value={progress ?? undefined} label={`Downloading ${title}`} />;
+}
+
 function DownloadAction({ track }: { track: Track }) {
-  // Subscribing here rather than in TrackRow keeps download churn from re-rendering the
-  // whole row, which matters on a 500-row playlist while a queue is draining.
-  const offline = useOfflineState();
-  const status = getOfflineStatus(track.id);
+  // This row's status only: a whole-store subscription re-rendered every row on each progress tick.
+  const status = useOfflineStatus(track.id);
   const isDownloading = status === "downloading";
 
   if (track.source === "local") return null;
@@ -131,12 +134,7 @@ function DownloadAction({ track }: { track: Track }) {
           /* Fed by the real byte count streamed from Rust. When the response has no
              Content-Length the store reports null and this falls back to the sweeping
              animation, which is honest about not knowing. */
-          <Loader
-            variant="percent"
-            size={18}
-            value={offline.progress ?? undefined}
-            label={`Downloading ${track.title}`}
-          />
+          <DownloadProgress title={track.title} />
         ) : status === "queued" ? (
           <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
         ) : status === "ready" ? (
@@ -209,13 +207,11 @@ function QuickAction({
  */
 function RatingActions({ track }: { track: Track }) {
   const { rateTrack } = useTrackContextMenu();
-  const libraryState = useLibraryState();
+  const rating = useLibrarySelector(() => libraryController.getTrackRating(track.id));
+  const isPending = useLibrarySelector((state) => state.pendingLikeTrackIds.has(track.id));
 
   // Local files have no YouTube rating to set, and a signed-out session has nowhere to put one.
   if (track.source === "local") return null;
-
-  const rating = libraryController.getTrackRating(track.id);
-  const isPending = libraryState.pendingLikeTrackIds.has(track.id);
 
   const button = (target: Exclude<TrackRating, "none">, icon: ReactNode, label: string) => {
     const isActive = rating === target;

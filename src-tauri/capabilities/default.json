@@ -1,8 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main","mini-player"],
+  "description": "Main and mini-player windows. Remote access is only the app's own localhost origin (release builds serve the UI from it).",
+  "windows": [
+    "main",
+    "mini-player"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -37,56 +40,9 @@
     "core:window:allow-set-cursor-icon",
     "core:window:allow-set-ignore-cursor-events"
   ],
-  "allowlist": {
-    "shell": {
-      "all": false,
-      "open": true
-    }
-  },
   "remote": {
     "urls": [
-      "https://**",
-      "http://localhost/**",
-      "http://localhost:*/*",
-      "http://127.0.0.1/**",
-      "http://127.0.0.1:*/*"
-    ]
-  },
-  "command": {
-    "allow": [
-      "greet",
-      "quit_app",
-      "frontend_log",
-      "app_setting_get",
-      "app_setting_set",
-      "app_setting_remove",
-      "app_settings_clear",
-      "cache_get",
-      "cache_set",
-      "cache_stats",
-      "cache_set_max_bytes",
-      "cache_clear",
-      "local_audio_scan",
-      "local_audio_read",
-      "fetch_audio_bytes",
-      "fetch_audio_source",
-      "fetch_youtube_music_audio",
-      "proxy_http_request",
-      "update_macos_media_session",
-      "update_windows_media_session",
-      "update_linux_media_session",
-      "save_youtube_credentials",
-      "load_youtube_credentials",
-      "delete_youtube_credentials",
-      "load_youtube_music_cookie",
-      "sign_in_youtube_music",
-      "delete_youtube_music_cookie",
-      "lastfm_auth_token",
-      "lastfm_complete_auth",
-      "lastfm_disconnect",
-      "lastfm_get_session",
-      "lastfm_scrobble",
-      "lastfm_update_now_playing"
+      "http://localhost:*/*"
     ]
   }
 }

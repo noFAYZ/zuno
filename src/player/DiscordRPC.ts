@@ -188,10 +188,6 @@ export class DiscordRpcService {
     },
   });
 
-  static async init(): Promise<void> {
-    logInternalDebug("Discord.init", { message: "Rust backend will handle connection" });
-  }
-
   static async setHideWhenPaused(hidden: boolean): Promise<void> {
     saveDiscordHideWhenPaused(hidden);
     await this.syncLatest();
