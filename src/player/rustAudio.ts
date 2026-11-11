@@ -162,6 +162,11 @@ export function dropStandby(): Promise<void> {
   return invoke("native_audio_drop_standby");
 }
 
+/** Has Rust start the standby itself when the active deck runs dry; `null` disarms. */
+export function queueNext(trackId: string | null): Promise<void> {
+  return invoke("native_audio_queue_next", { trackId });
+}
+
 /** Stops and clears the active deck only. See `Command::DropActive` on the Rust side. */
 export function dropActive(): Promise<void> {
   return invoke("native_audio_drop_active");

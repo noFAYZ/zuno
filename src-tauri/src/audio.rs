@@ -40,6 +40,9 @@ const TICK: Duration = Duration::from_millis(250);
 /// as stepping, and the thread is otherwise idle.
 const FADE_STEP: Duration = Duration::from_millis(20);
 
+/// How often an armed gapless handover checks whether the active deck ran dry.
+const GAPLESS_POLL: Duration = Duration::from_millis(5);
+
 /// How long a decoder read waits for bytes that have not landed yet before giving up.
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 /// Poll interval while waiting on the download. Short enough to be inaudible.
@@ -276,6 +279,8 @@ pub(crate) enum Command {
     /// heading towards, so a preload could never survive a second click arriving before the
     /// first one finished.
     DropActive,
+    /// Start the standby by itself the instant the active deck runs dry, if it holds this track.
+    QueueNext(Option<String>),
 }
 
 /// The handle held as Tauri state. Cheap to clone, trivially `Send + Sync`.
@@ -692,6 +697,7 @@ fn run(
         rate: 1.0,
         playing: false,
         fade: None,
+        queued: None,
     };
 
     if ready.send(Ok(())).is_err() {
@@ -703,7 +709,13 @@ fn run(
         let now = Instant::now();
         let until_tick = next_tick.saturating_duration_since(now);
         // A fade needs finer steps than the position tick, so whichever is due first wins.
-        let timeout = if engine.fade.is_some() { until_tick.min(FADE_STEP) } else { until_tick };
+        let timeout = if engine.fade.is_some() {
+            until_tick.min(FADE_STEP)
+        } else if engine.queued.is_some() {
+            until_tick.min(GAPLESS_POLL)
+        } else {
+            until_tick
+        };
 
         match rx.recv_timeout(timeout) {
             Ok(command) => {
@@ -717,6 +729,7 @@ fn run(
         }
 
         engine.advance_fade();
+        engine.advance_gapless();
         if Instant::now() >= next_tick {
             engine.tick();
             next_tick = Instant::now() + TICK;
@@ -747,6 +760,8 @@ struct Engine {
     rate: f32,
     playing: bool,
     fade: Option<Fade>,
+    /// See `Command::QueueNext`.
+    queued: Option<String>,
 }
 
 impl Engine {
@@ -791,6 +806,7 @@ impl Engine {
                     // A fade against a deck that is being reloaded would ramp a track that is
                     // no longer there.
                     self.cancel_fade();
+                    self.queued = None;
                 }
                 let duration = decoded_duration_sec
                     .filter(|value| *value > 0.0)
@@ -853,6 +869,7 @@ impl Engine {
             }
             Command::Stop => {
                 self.cancel_fade();
+                self.queued = None;
                 for deck in &mut self.decks {
                     deck.clear();
                 }
@@ -879,6 +896,13 @@ impl Engine {
                 }
             }
             Command::Transition { track_id, fade_ms, reply } => {
+                self.queued = None;
+                // `advance_gapless` already made the swap this asks for.
+                let active = self.decks[self.active].track_id.as_deref();
+                if self.playing && active == Some(track_id.as_str()) {
+                    let _ = reply.send(true);
+                    return false;
+                }
                 let standby = self.standby();
                 if self.decks[standby].track_id.as_deref() != Some(track_id.as_str()) {
                     let _ = reply.send(false);
@@ -952,9 +976,11 @@ impl Engine {
                 // A fade reads the active deck's volume every tick; cancel it first, or the
                 // next tick would ramp a deck that was just cleared.
                 self.cancel_fade();
+                self.queued = None;
                 self.decks[self.active].clear();
                 self.playing = false;
             }
+            Command::QueueNext(track_id) => self.queued = track_id,
             Command::SetOutputDevice { id, reply } => {
                 let _ = reply.send(self.reopen(id));
             }
@@ -992,6 +1018,7 @@ impl Engine {
         // A fade on the old decks is stale — dropped rather than settled through `cancel_fade`,
         // which would write a volume to a deck this is about to discard anyway.
         self.fade = None;
+        self.queued = None;
         self.stream = Some(stream);
         self.decks = decks;
         self.device_id = id;
@@ -1036,6 +1063,36 @@ impl Engine {
             self.decks[outgoing].clear();
             self.decks[self.active].sink.set_volume(target);
         }
+    }
+
+    /**
+     * Starts the queued standby the moment the active deck runs dry.
+     *
+     * Waiting for the tick and then the frontend's `transition` left a pause of up to half a
+     * second between gapless tracks (#178). This polls every `GAPLESS_POLL` while armed instead.
+     *
+     * ponytail: up to ~10 ms of silence (the poll, then the player's 5 ms control update). Append
+     * the next source to the active player's queue if sample-accurate gapless ever matters.
+     */
+    fn advance_gapless(&mut self) {
+        let standby = self.standby();
+        if self.queued.is_none()
+            || !self.playing
+            || self.fade.is_some()
+            || !self.decks[self.active].sink.empty()
+        {
+            return;
+        }
+        let queued = self.queued.take();
+        if self.decks[standby].track_id != queued || !self.decks[standby].is_healthy() {
+            return;
+        }
+        let Some(track_id) = self.decks[self.active].track_id.clone() else { return };
+        self.decks[self.active].clear();
+        self.decks[standby].sink.set_volume(self.output_volume());
+        self.decks[standby].sink.play();
+        self.active = standby;
+        let _ = self.app.emit("native-audio-ended", EndedEvent { track_id });
     }
 
     fn tick(&mut self) {

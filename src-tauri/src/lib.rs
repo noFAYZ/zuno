@@ -4684,6 +4684,16 @@ fn native_audio_drop_active(
     state.send(audio::Command::DropActive).map_err(cache_error)
 }
 
+/// Arms the audio thread to start the standby itself when this track runs dry. See
+/// `Command::QueueNext`; `None` disarms.
+#[tauri::command(async)]
+fn native_audio_queue_next(
+    state: tauri::State<'_, audio::NativeAudio>,
+    track_id: Option<String>,
+) -> Result<(), CommandError> {
+    state.send(audio::Command::QueueNext(track_id)).map_err(cache_error)
+}
+
 /// Devices cpal can currently see, for the output-device picker in Settings.
 #[tauri::command(async)]
 fn native_audio_list_output_devices() -> Result<Vec<audio::AudioOutputDevice>, CommandError> {
@@ -5071,6 +5081,7 @@ pub fn run() {
             native_audio_has_standby,
             native_audio_drop_standby,
             native_audio_drop_active,
+            native_audio_queue_next,
             native_audio_set_equalizer,
             native_audio_list_output_devices,
             native_audio_set_output_device,
