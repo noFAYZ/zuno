@@ -4978,6 +4978,11 @@ pub fn run() {
             if let Err(error) = initialize_app_log(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] {}", error.message);
             }
+            // A missing or outdated WebView2 is the usual cause of a window that never paints.
+            match tauri::webview_version() {
+                Ok(version) => eprintln!("[internal][tauri][info] webview version={version}"),
+                Err(error) => eprintln!("[internal][tauri][warn] webview version unavailable: {error}"),
+            }
             #[cfg(target_os = "linux")]
             linux_media::mirror_volume(app.handle());
             // Always built, so toggling the setting takes effect without a restart.
