@@ -110,6 +110,11 @@ jobs:
             rust_target: ""
             build_args: --bundles msi,nsis
             apple_signing_identity: ""
+          - name: Windows ARM64
+            os: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            build_args: --target aarch64-pc-windows-msvc --bundles msi,nsis
+            apple_signing_identity: ""
           - name: macOS Apple Silicon
             os: macos-latest
             rust_target: aarch64-apple-darwin
@@ -172,6 +177,12 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Select Clang for Windows ARM64 native dependencies
+        if: matrix.platform.name == 'Windows ARM64'
+        shell: pwsh
+        run: |
+          "CC_aarch64_pc_windows_msvc=clang" >> $env:GITHUB_ENV
 
       - name: Add Rust target
         if: matrix.platform.rust_target != ''
