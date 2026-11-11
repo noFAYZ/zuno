@@ -95,6 +95,15 @@ export function sortLibraryEntries<T extends LibraryEntry>(
   return [...pinned, ...rest];
 }
 
+/** Pinned entries first, in pin order, ahead of whatever the sort decided (#187). */
+export function pinnedFirst<T extends LibraryEntry>(entries: readonly T[], pinnedIds: readonly string[]): T[] {
+  if (!pinnedIds.length) return [...entries];
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const pinned = pinnedIds.map((id) => byId.get(id)).filter((entry): entry is T => Boolean(entry));
+  const pinnedSet = new Set(pinnedIds);
+  return [...pinned, ...entries.filter((entry) => !pinnedSet.has(entry.id))];
+}
+
 /**
  * Whether rows may be dragged right now.
  *

@@ -13,6 +13,7 @@ export {};
 import {
   canReorderLibrary,
   filterLibraryEntries,
+  pinnedFirst,
   matchesLibraryQuery,
   reorderBlockedReason,
   sortLibraryEntries,
@@ -122,5 +123,10 @@ check(
   (reorderBlockedReason("name", "daft") ?? "").includes("filter"),
   "the filter takes precedence in the explanation",
 );
+
+// Pins lead in pin order whatever the sort, and a pin the filter hid stays hidden.
+equal(ids(pinnedFirst(ordered, ["c", "a"])), "c,a,b", "pinned playlists lead in pin order");
+equal(ids(pinnedFirst(ordered, ["gone"])), "a,b,c", "a pin for a missing playlist changes nothing");
+equal(ids(pinnedFirst([entry("b", "apple")], ["a"])), "b", "a filtered-out pin is not brought back");
 
 console.log("sidebarLibrary: ok");
