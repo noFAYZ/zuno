@@ -648,6 +648,8 @@ export function Sidebar({
     return likedSongsPlaylist
       ? [likedSongsPlaylist, ...localPlaylists, ...defaultPlaylists]
       : [...localPlaylists, ...defaultPlaylists];
+    // `recentPlaylistsRevision` busts the memo when a play timestamp in storage changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     libraryState.library?.likedSongsPlaylist,
     libraryState.library?.playlists,
@@ -674,6 +676,8 @@ export function Sidebar({
           pinnedId: libraryState.library?.likedSongsPlaylist?.id,
         },
       ),
+    // `recentPlaylistsRevision` busts the memo when a play timestamp in storage changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       playlists,
       libraryFilter,
@@ -715,11 +719,7 @@ export function Sidebar({
     }
 
     return libraryAlbums;
-  }, [
-    libraryState.library?.likedSongsPlaylist,
-    libraryState.library?.albums,
-    albumOrder,
-  ]);
+  }, [libraryState.library, albumOrder]);
 
   useEffect(
     () => subscribeToRecentPlaylists(
@@ -776,12 +776,7 @@ export function Sidebar({
         );
       }
     }
-  }, [
-    libraryState.library?.likedSongsPlaylist,
-    libraryState.library?.playlists,
-    localPlaylists,
-    playlistOrder,
-  ]);
+  }, [libraryState.library, localPlaylists, playlistOrder]);
 
   useEffect(() => {
     if (!libraryState.library) return;
@@ -807,11 +802,7 @@ export function Sidebar({
         );
       }
     }
-  }, [
-    libraryState.library?.likedSongsPlaylist,
-    libraryState.library?.albums,
-    albumOrder,
-  ]);
+  }, [libraryState.library, albumOrder]);
 
   const visibleAlbums = useMemo(
     () =>

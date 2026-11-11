@@ -24,6 +24,7 @@ import type {
   TrackRating,
 } from "../datasource/types";
 import { logInternalError, logInternalInfo } from "../internal/logging";
+import { getInvokeErrorMessage } from "../internal/appSettings";
 import { isOnline } from "../internal/connectivity";
 import { getAppSetting, setAppSetting } from "../internal/appSettings";
 import { forgetTrackInPlaylist, rememberTrackInPlaylist } from "./playlistMembership";
@@ -107,8 +108,7 @@ function delay(ms: number): Promise<void> {
  * — there is no code to switch on. Kept next to the string it matches so the two move together.
  */
 function isSignInCancellation(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /sign-in was cancelled/i.test(message);
+  return /sign-in was cancelled/i.test(getInvokeErrorMessage(error));
 }
 
 /** Local mirror of dislikes: YouTube stores the rating but exposes no list to read it back. */
@@ -293,9 +293,12 @@ export class LibraryController {
     }
   }
 
-  async signIn(): Promise<void> {
-    if (!this.dataSource.signIn) return;
+  /** Resolves true only once an account is signed in and its library loaded. */
+  async signIn(): Promise<boolean> {
+    if (!this.dataSource.signIn) return false;
     logInternalInfo("LibraryController.signIn start");
+    // Adding an account: a failed or cancelled attempt must not drop the session already here.
+    const wasSignedIn = this.state.status === "ready";
     this.activeAuthFlow = "sign-in";
     this.setState({
       status: "authorizing",
@@ -317,6 +320,7 @@ export class LibraryController {
       logInternalInfo("LibraryController.signIn authentication complete");
       await this.refreshAfterSignIn();
       logInternalInfo("LibraryController.signIn refresh complete");
+      return true;
     } catch (error) {
       /*
        * Cancelling is not a failure. The backend reports it the same way as any other error,
@@ -325,7 +329,15 @@ export class LibraryController {
        */
       if (isSignInCancellation(error)) {
         logInternalInfo("LibraryController.signIn cancelled by user");
-        this.setState({ status: "signed-out", authPrompt: null, error: null });
+        this.setState({ status: wasSignedIn ? "ready" : "signed-out", authPrompt: null, error: null });
+      } else if (wasSignedIn) {
+        // Re-read the backend's active account rather than assume which one survived the attempt.
+        logInternalError("LibraryController.signIn failed", error);
+        this.setState({ status: "loading", authPrompt: null });
+        await this.recoverConnection();
+        if (this.state.status === "ready") {
+          this.setState({ error: `YouTube Music sign-in failed.\n\n${getInvokeErrorMessage(error)}` });
+        }
       } else {
         this.setFailure("YouTube Music sign-in failed.", error);
       }
@@ -334,6 +346,7 @@ export class LibraryController {
       // describing work that is no longer running.
       this.setState({ authProgress: null });
     }
+    return false;
   }
 
   /**
@@ -1100,7 +1113,7 @@ export class LibraryController {
 
   private setFailure(message: string, error: unknown) {
     logInternalError("LibraryController operation failed", error);
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = getInvokeErrorMessage(error);
     this.setState({
       status: "error",
       // recoverConnection retries on reconnect, so offline this is a wait, not a failure.

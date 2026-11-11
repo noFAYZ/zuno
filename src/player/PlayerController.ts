@@ -3,6 +3,7 @@ import type { Lyrics, LyricsQuery, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { isPrematureEnd } from "./prematureEnd";
 import { AudioEngine, isEmbedRestrictedPlaybackError } from "./AudioEngine";
+import * as rustAudio from "./rustAudio";
 import { Queue } from "./Queue";
 import { NavigationCoalescer } from "./navigationCoalescer";
 import { recordPlay } from "./playHistory";
@@ -13,6 +14,7 @@ import { findPlayableIndex } from "./playableIndex";
 import { hasPreloadDeck } from "./preloadDeck";
 import { getAudioEngineMode } from "../ui/settings/audioEngine";
 import { DiscordRpcService } from "./DiscordRPC";
+import { getInvokeErrorMessage } from "../internal/appSettings";
 import {
   MAX_CROSSFADE_SEC,
   readPlaybackSettings,
@@ -99,15 +101,6 @@ type Listener = () => void;
 const DISCORD_ASSET_URL_LIMIT = 256;
 /** How long the sleep timer spends fading out before it pauses. */
 const SLEEP_FADE_MS = 20_000;
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) return message;
-  }
-  return String(error);
-}
 
 /** A session saved before shuffle split out stored it as the order mode. */
 function wasLegacyShuffleMode(mode: unknown): boolean {
@@ -210,7 +203,7 @@ export class PlayerController {
   private warmingStream = false;
   private crossfadeSec = 0;
   private gaplessEnabled = true;
-  private transitionTimerId: number | null = null;
+  private stopTransitionTicker: (() => void) | null = null;
   private scrobbleTimerId: number | null = null;
   private playbackSettingsTimerId: ReturnType<typeof setTimeout> | null = null;
   private transitioning = false;
@@ -1381,7 +1374,7 @@ export class PlayerController {
         if (canFallBackToIframe) {
           logInternalWarn("PlayerController.ensureTrackLoaded falling back to the YouTube player", {
             trackId: track.id,
-            error: getErrorMessage(error),
+            error: getInvokeErrorMessage(error),
           });
           await this.audioEngine.loadIframeFallback(track.id);
         } else if (canFallBackToNative && isEmbedRestrictedPlaybackError(error)) {
@@ -1389,7 +1382,7 @@ export class PlayerController {
           if (!nativeAudioData) throw error;
           logInternalWarn("PlayerController.ensureTrackLoaded falling back to native audio", {
             trackId: track.id,
-            error: getErrorMessage(error),
+            error: getInvokeErrorMessage(error),
           });
           await this.audioEngine.loadNativeFallback(
             track.id,
@@ -1422,7 +1415,7 @@ export class PlayerController {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
       });
-      const detail = getErrorMessage(error);
+      const detail = getInvokeErrorMessage(error);
       if (track.source === "local" || this.audioEngine.usesNativeAudio()) {
         throw new Error(`Unable to load audio data for playback. ${detail}`);
       }
@@ -1435,12 +1428,6 @@ export class PlayerController {
   }
 
   private setState(partial: Partial<PlayerState>) {
-    logInternalDebug("PlayerController.setState", {
-      previousStatus: this.state.status,
-      nextStatus: partial.status ?? this.state.status,
-      hasError: Boolean(partial.error),
-      trackId: partial.currentTrack?.id ?? this.state.currentTrack?.id ?? null,
-    });
     this.state = { ...this.state, ...partial };
     this.syncTransitionTicker();
     this.syncScrobbleTicker();
@@ -1624,17 +1611,21 @@ export class PlayerController {
       && this.isTabActive
       && (this.gaplessEnabled || this.crossfadeSec > 0);
 
-    if (wanted === (this.transitionTimerId !== null)) return;
+    if (wanted === (this.stopTransitionTicker !== null)) return;
 
     if (!wanted) {
-      if (this.transitionTimerId !== null) globalThis.clearInterval(this.transitionTimerId);
-      this.transitionTimerId = null;
+      this.stopTransitionTicker?.();
+      this.stopTransitionTicker = null;
       return;
     }
-    this.transitionTimerId = globalThis.setInterval(
-      () => this.onTransitionTick(),
-      TRANSITION_TICK_MS,
-    );
+    // Rust's position events keep firing while the window is hidden; a silent hidden page's
+    // timers are throttled to about once a minute, which would miss every preload and crossfade.
+    if (this.audioEngine.usesRustAudio()) {
+      this.stopTransitionTicker = rustAudio.onPosition(() => this.onTransitionTick());
+      return;
+    }
+    const intervalId = globalThis.setInterval(() => this.onTransitionTick(), TRANSITION_TICK_MS);
+    this.stopTransitionTicker = () => globalThis.clearInterval(intervalId);
   }
 
   /**
@@ -1687,7 +1678,7 @@ export class PlayerController {
       status: this.state.status,
       trackId: this.state.currentTrack?.id,
     });
-    const detail = getErrorMessage(error);
+    const detail = getInvokeErrorMessage(error);
     const track = this.state.currentTrack;
     const offlineMiss = !isOnline() && track && !isPlayableOffline(track);
 
@@ -1707,15 +1698,13 @@ export class PlayerController {
     for (const listener of this.listeners) {
       listener();
     }
-    
-    // Update Discord RPC presence
     this.updateDiscordPresence();
   }
 
   private updateDiscordPresence() {
+    // Only the tab that owns playback speaks for it; an idle background tab must not clear it.
+    if (!this.isTabActive) return;
     const currentTrack = this.state.currentTrack;
-    logInternalDebug("updateDiscordPresence", { status: this.state.status, hasTrack: !!currentTrack });
-    
     if (!currentTrack || (this.state.status !== "playing" && this.state.status !== "paused")) {
       void DiscordRpcService.syncPresence(null, this.state.status);
       return;

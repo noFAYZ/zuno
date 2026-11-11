@@ -3392,15 +3392,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "portpicker"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be97d76faf1bfab666e1375477b23fde79eccf0276e9b63b92a39d676a889ba9"
-dependencies = [
- "rand 0.8.6",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6893,6 +6884,7 @@ dependencies = [
  "block2",
  "discord-rich-presence",
  "futures-util",
+ "gtk",
  "keyring",
  "lofty",
  "md5",
@@ -6900,7 +6892,6 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "opus",
- "portpicker",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rodio",
@@ -6921,6 +6912,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "url",
+ "webview2-com",
  "windows 0.61.3",
 ]
 

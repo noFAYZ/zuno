@@ -150,7 +150,7 @@ fn collect() -> MemoryReport {
     MemoryReport::default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn app_memory_report() -> MemoryReport {
     collect()
 }

@@ -48,6 +48,7 @@ function makeDataSource(
   refreshResult: boolean | (() => boolean),
   libraryFailsAfterRecovery = false,
   restoreResult = true,
+  signInError: unknown = null,
 ) {
   let authExpired: (() => void) | null = null;
   let refreshCalls = 0;
@@ -70,6 +71,9 @@ function makeDataSource(
     async getLibrary() {
       if (recovered && libraryFailsAfterRecovery) throw new AuthExpiredError("expired");
       return EMPTY_LIBRARY;
+    },
+    async signIn() {
+      throw signInError;
     },
   };
 
@@ -164,6 +168,36 @@ function makeDataSource(
 
   equal(controller.getState().status, "signed-out", "a genuinely absent session signs out");
   equal(controller.getState().error, null, "with no error: nothing failed, nobody is signed in");
+}
+
+// Adding an account while signed in. `invoke` rejects with a plain object, not an Error.
+{
+  const cancelled = { message: "YouTube Music sign-in was cancelled." };
+  const { controller } = makeDataSource(true, false, true, cancelled);
+  await controller.initialize();
+
+  equal(await controller.signIn(), false, "a cancelled add-account reports no sign-in");
+  equal(controller.getState().status, "ready", "and leaves the current account signed in");
+  equal(controller.getState().error, null, "without calling a cancel a failure");
+}
+
+{
+  const { controller } = makeDataSource(true, false, true, { message: "YouTube Music sign-in timed out." });
+  await controller.initialize();
+
+  equal(await controller.signIn(), false, "a failed add-account reports no sign-in");
+  equal(controller.getState().status, "ready", "and still leaves the current account signed in");
+  check((controller.getState().error ?? "").includes("timed out"), "while saying why it failed");
+}
+
+{
+  const cancelled = { message: "YouTube Music sign-in was cancelled." };
+  const { controller } = makeDataSource(false, false, false, cancelled);
+  await controller.initialize();
+
+  await controller.signIn();
+  equal(controller.getState().status, "signed-out", "cancelling a first sign-in stays signed out");
+  equal(controller.getState().error, null, "quietly");
 }
 
 console.log("sessionRecovery.check passed");
