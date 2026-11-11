@@ -158,8 +158,9 @@ gst-inspect-1.0 | grep -E 'avdec_aac|avdec_h264'
 <details>
 <summary>⬜ A blank grey window</summary>
 
-A WebKitGTK rendering problem under Wayland, most often on Nvidia. Launch from a terminal
-with one of:
+A WebKitGTK rendering problem under Wayland, most often on Nvidia. On Wayland with the Nvidia
+driver, Zuno sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself. Anywhere else, launch from a
+terminal with one of:
 
 ```bash
 WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
