@@ -23,11 +23,11 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `**Accounts** — switch between multiple YouTube Music accounts instantly, no signing out required.
-**Sound** — pick your exact output device (real speaker/headphone names on Linux too), plus a bypass toggle and mini EQ right in the player bar.
-**Playlists** — shuffle now truly shuffles the whole playlist from wherever you are in it, loop cycles properly instead of getting stuck, and any playlist can be hidden from your library.
-**Discovery** — start a radio station from any track, and pages load in with proper skeletons instead of a blank flash.
-**Fixes** — some tracks auto-skipping a few seconds in, crossfade stalling when minimized, YouTube embed errors now falling back automatically, and a second launch refocusing Zuno instead of opening twice.
+export const RELEASE_NOTE_BODY = `**Offline** — downloads play with their artwork and no connection, and Zuno starts offline with your library intact.
+**Sound** — volume normalization, separate speed and pitch, a draw-your-own equaliser, and gapless with no pause.
+**Mini player** — Cassette, Vinyl and Y2K skins.
+**Library** — pinned playlists, remembered sort order, full-size covers, app zoom and settings search.
+**Fixes** — sped-up songs, Windows sign-in error 8, the Wayland crash on NVIDIA and lyrics memory spikes. Windows on ARM gets native builds.
 
 Report anything broken on GitHub, or come say hello at /r/ZunoMusic.
 
