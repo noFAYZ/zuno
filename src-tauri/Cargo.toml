@@ -82,7 +82,8 @@ windows = { version = "0.61.3", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-souvlaki = "0.7"
+# zbus: souvlaki's dbus backend drains one event per second, so MPRIS lagged tracks behind (#182).
+souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
 # Already in the tree via tauri; used to size the sign-in window's address bar in GTK's box.
 gtk = "0.18"
 
