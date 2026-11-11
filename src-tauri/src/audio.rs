@@ -52,6 +52,77 @@ const STREAM_RETRY_WINDOW: Duration = Duration::from_secs(10);
 /// A decoded stream ready to be handed to a deck. rodio resamples it to the device's rate.
 pub(crate) type BoxedSource = Box<dyn Source + Send>;
 
+/// Longest stretch the mixer goes without re-reading a deck's rate: ~85 ms at 48 kHz.
+const SPAN_FRAMES: usize = 4_096;
+
+/**
+ * Gives a source bounded spans, so rodio's mixer keeps re-reading its sample rate.
+ *
+ * The mixer resamples a deck through one converter that reads the rate only at a span boundary,
+ * and Opus reports none, so it was read once per deck: a deck that first played 44.1 kHz played
+ * every later 48 kHz track 9% fast and sharp (#72, #177), and `Player::set_speed`, which works by
+ * changing the reported rate, never applied (#184).
+ */
+struct Respan {
+    inner: BoxedSource,
+    left: usize,
+}
+
+impl Respan {
+    fn new(inner: BoxedSource) -> Self {
+        let left = SPAN_FRAMES * inner.channels().get() as usize;
+        Self { inner, left }
+    }
+}
+
+impl Iterator for Respan {
+    type Item = rodio::Sample;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        self.left = match self.left {
+            0 | 1 => SPAN_FRAMES * self.inner.channels().get() as usize,
+            left => left - 1,
+        };
+        Some(sample)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl Source for Respan {
+    fn current_span_len(&self) -> Option<usize> {
+        Some(self.inner.current_span_len().map_or(self.left, |len| len.min(self.left)))
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(position)
+    }
+}
+
+/// A deck's player, paused. Fresh per track: a reused one resamples at the previous track's
+/// rate until its first span ends, so 48 kHz Opus after a 44.1 kHz track played sharp (#72).
+fn paused_player(mixer: &rodio::mixer::Mixer) -> Player {
+    let player = Player::connect_new(mixer);
+    player.pause();
+    player
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PositionEvent {
@@ -632,10 +703,11 @@ fn open_output(
     generation: u64,
 ) -> Result<(MixerDeviceSink, [Deck; 2]), String> {
     let stream = open_device_sink(id, stream_failure_reporter(commands, generation))?;
-    let deck = || {
-        let sink = Player::connect_new(stream.mixer());
-        sink.pause();
-        Deck { sink, track_id: None, duration_sec: 0.0, health: None }
+    let deck = || Deck {
+        sink: paused_player(stream.mixer()),
+        track_id: None,
+        duration_sec: 0.0,
+        health: None,
     };
     let decks = [deck(), deck()];
     Ok((stream, decks))
@@ -803,14 +875,17 @@ impl Engine {
                  * swap starts it in the same tick it becomes active.
                  */
                 let volume = if standby { 0.0 } else { self.output_volume() };
-                let rate = self.rate;
+                let Some(stream) = self.stream.as_ref() else {
+                    let _ = reply.send(Err("audio output is not open".to_string()));
+                    return false;
+                };
 
                 let deck = &mut self.decks[index];
-                deck.sink.stop();
-                deck.sink.append(source);
-                deck.sink.pause();
+                // Replacing the player drops the old one, which stops it.
+                deck.sink = paused_player(stream.mixer());
                 deck.sink.set_volume(volume);
-                deck.sink.set_speed(rate);
+                deck.sink.set_speed(self.rate);
+                deck.sink.append(Respan::new(source));
                 deck.track_id = Some(track_id);
                 deck.duration_sec = duration;
                 deck.health = health;
@@ -1090,5 +1165,54 @@ mod tests {
         }
         assert!(matches!(rx.try_recv(), Ok(Command::StreamFailed(7))));
         assert!(rx.try_recv().is_err(), "cpal repeats POLLERR in a loop; only the first counts");
+    }
+
+    /// A constant 48 kHz mono tone that reports no span length, as Opus does.
+    struct Unspanned(usize);
+
+    impl Iterator for Unspanned {
+        type Item = rodio::Sample;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0 = self.0.checked_sub(1)?;
+            Some(0.5)
+        }
+    }
+
+    impl Source for Unspanned {
+        fn current_span_len(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> rodio::ChannelCount {
+            rodio::ChannelCount::new(1).unwrap()
+        }
+        fn sample_rate(&self) -> rodio::SampleRate {
+            rodio::SampleRate::new(48_000).unwrap()
+        }
+        fn total_duration(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    /// Samples a 48 kHz mixer produces for 2 s of input with speed set to 2x after it started.
+    fn mixed_at_double_speed(respan: bool) -> usize {
+        let (mixer, out) = rodio::mixer::mixer(
+            rodio::ChannelCount::new(1).unwrap(),
+            rodio::SampleRate::new(48_000).unwrap(),
+        );
+        let source: BoxedSource = Box::new(Unspanned(96_000));
+        let source = if respan { Box::new(Respan::new(source)) } else { source };
+        // How `Player` applies `set_speed`: a 1x adapter, retuned from the mixing thread.
+        mixer.add(source.speed(1.0).periodic_access(Duration::from_millis(5), |speed| {
+            speed.set_factor(2.0)
+        }));
+        out.count()
+    }
+
+    #[test]
+    fn a_speed_change_reaches_a_source_with_no_spans() {
+        assert_eq!(mixed_at_double_speed(false), 96_000, "the unfixed path ignores the speed");
+        let mixed = mixed_at_double_speed(true);
+        // 1x until the first span ends, 2x after.
+        assert!((48_000..52_000).contains(&mixed), "expected about 1 s of output, got {mixed}");
     }
 }

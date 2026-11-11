@@ -251,12 +251,12 @@ impl<S: Source> Iterator for EqualizedSource<S> {
         if self.generation != EQUALIZER.generation.load(Ordering::Acquire) {
             self.reload();
         }
+        // Counted while bypassed too, or turning the EQ on mid-track filters left as right.
+        let channel = self.channel_index;
+        self.channel_index = (self.channel_index + 1) % self.filters.len();
         if self.bypass {
             return Some(sample);
         }
-
-        let channel = self.channel_index;
-        self.channel_index = (self.channel_index + 1) % self.filters.len();
 
         let mut output = sample * self.preamp;
         for filter in &mut self.filters[channel] {
