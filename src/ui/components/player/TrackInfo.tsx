@@ -7,6 +7,7 @@ import { shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { useLibraryState } from "../../../player/playerStore";
 import { usePlayerUIState } from "../../stores/playerUIStore";
 import { TrackArtwork } from "../TrackArtwork";
+import { CoverButton } from "../CoverButton";
 import { ArtistLinks } from "../ArtistLinks";
 import { useTrackContextMenu } from "../TrackContextMenu";
 
@@ -57,12 +58,14 @@ export function TrackInfo() {
       onContextMenu={(event) => openTrackMenu(event, currentTrack)}
     >
       {uiState.showAlbumArt && (
-        <TrackArtwork
-          className="size-12 shrink-0  object-cover"
-          size={48}
-          artworkUrl={currentTrack.artworkUrl}
-          iconSize={22}
-        />
+        <CoverButton artworkUrl={currentTrack.artworkUrl} label={currentTrack.title}>
+          <TrackArtwork
+            className="size-12 shrink-0  object-cover"
+            size={48}
+            artworkUrl={currentTrack.artworkUrl}
+            iconSize={22}
+          />
+        </CoverButton>
       )}
       <div className="flex min-w-0 flex-col gap-0.5">
         <div ref={titleViewportRef} className="relative min-w-0 overflow-hidden">

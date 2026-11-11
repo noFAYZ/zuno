@@ -26,6 +26,7 @@ import { playerController, shallowEqual, usePlayerSelector } from "../../player/
 import { playerUIStore, usePlayerUIState } from "../stores/playerUIStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
+import { CoverButton } from "../components/CoverButton";
 import { BlurredArtwork } from "../components/BlurredArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 import { OFFSET_STEP_SEC, setLyricsOffset, useLyricsOffset } from "../settings/lyricsOffset";
@@ -481,13 +482,15 @@ export function LyricsView({ onClose }: LyricsViewProps) {
       <div className="relative flex min-h-0 flex-1 flex-col @4xl/lyrics:flex-row">
         {/* Wide enough for two columns: the song gets a poster, the lyrics get the rest. */}
         <aside className="hidden shrink-0 flex-col gap-6 px-8 py-8 @4xl/lyrics:flex @4xl/lyrics:w-[19rem] @6xl/lyrics:w-[22rem]">
-          <TrackArtwork
-            artworkUrl={track?.artworkUrl}
-            size={288}
-            className="aspect-square w-full   shadow-2xl shadow-black/50"
-            iconSize={40}
-            loading="eager"
-          />
+          <CoverButton artworkUrl={track?.artworkUrl} label={track?.title ?? "this track"} className="w-full">
+            <TrackArtwork
+              artworkUrl={track?.artworkUrl}
+              size={288}
+              className="aspect-square w-full   shadow-2xl shadow-black/50"
+              iconSize={40}
+              loading="eager"
+            />
+          </CoverButton>
           <div className="min-w-0">
             <h1 className="text-balance text-2xl font-bold leading-tight tracking-[-0.03em] text-foreground">
               {track?.title ?? "Nothing playing"}
