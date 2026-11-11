@@ -6,7 +6,7 @@
  */
 export {};
 
-import { removeAccountOutcome } from "./YouTubeMusicDataSource";
+import { artistFromSubtitle, removeAccountOutcome } from "./YouTubeMusicDataSource";
 
 function check(condition: boolean, message: string): void {
   if (!condition) throw new Error(`FAILED: ${message}`);
@@ -37,3 +37,12 @@ check(
 );
 
 console.log("YouTubeMusicDataSource.removeAccountOutcome: ok");
+
+// An album card on an artist's own page names no artist; its year is not one (#169).
+check(artistFromSubtitle("Album • 2021") === undefined, "type and year alone name no artist");
+check(artistFromSubtitle("2016") === undefined, "a bare year is not an artist");
+check(artistFromSubtitle("Radiohead • 1995") === "Radiohead", "an artist beside a year survives");
+check(artistFromSubtitle("Single • The 1975") === "The 1975", "a name containing digits is still a name");
+check(artistFromSubtitle(undefined) === undefined, "no subtitle, no artist");
+
+console.log("YouTubeMusicDataSource.artistFromSubtitle: ok");

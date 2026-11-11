@@ -329,6 +329,20 @@ interface StoredGoogleAccount {
  * `YoutubeAccountStore`, and it decides whether the UI silently does nothing, refreshes for a
  * fallback account, or shows signed-out.
  */
+const RELEASE_TYPE_LABELS = new Set(["album", "single", "ep", "song", "video", "playlist"]);
+
+/**
+ * The artist a bare subtitle names, if any. An album card on an artist's page reads
+ * "Album • 2021" because the artist is implied, and taking it whole made the year the artist (#169).
+ */
+export function artistFromSubtitle(subtitle: string | undefined): string | undefined {
+  const parts = (subtitle ?? "")
+    .split("•")
+    .map((part) => part.trim())
+    .filter((part) => part && !/^\d{4}$/.test(part) && !RELEASE_TYPE_LABELS.has(part.toLowerCase()));
+  return parts.length > 0 ? parts.join(" • ") : undefined;
+}
+
 export function removeAccountOutcome(
   previousCookie: string | null,
   newActiveCookie: string | null,
@@ -368,7 +382,8 @@ function createPlaybackNonce(): string {
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 // v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
 // channel avatar — so anything cached under the older shape-and-crop rules has to go.
-const ARTIST_CACHE_VERSION = "v9";
+// v10: releases on an artist page carry that artist, not the release year (#169).
+const ARTIST_CACHE_VERSION = "v10";
 /**
  * How long a background artist refresh is skipped after a recent one.
  *
@@ -773,7 +788,7 @@ export class YouTubeMusicDataSource extends DataSource {
         .map((run) => run.text)
         .filter(Boolean)
         .join(", ")
-      || item.subtitle?.toString()
+      || artistFromSubtitle(item.subtitle?.toString())
       || "Unknown artist";
   }
 
@@ -3398,7 +3413,8 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   async getAlbumTracks(album: Album, onUpdate?: (tracks: Track[]) => void): Promise<Track[]> {
-    const cacheKey = `youtube-music:album-tracks:v4:${album.id}`;
+    // v5: tracks cached under v4 may name the release year as their artist (#169).
+    const cacheKey = `youtube-music:album-tracks:v5:${album.id}`;
     const cached = await getCachedJson<Track[]>(cacheKey);
 
     if (cached?.length) {
@@ -3848,6 +3864,12 @@ export class YouTubeMusicDataSource extends DataSource {
       subscriberCount,
     };
 
+    // A release on an artist's own page links no artist of its own: it is this artist's (#169).
+    const ownRelease = (album: Album): Album =>
+      album.artists?.some((reference) => reference.id.startsWith("UC"))
+        ? album
+        : { ...album, artist: artist.name, artists: [{ id: artistId, name: artist.name }] };
+
     const popularSongs: Track[] = [];
     const releases: Album[] = [];
     const playlists: Playlist[] = [];
@@ -3891,7 +3913,7 @@ export class YouTubeMusicDataSource extends DataSource {
                   : sectionTitle.includes("single")
                     ? "single"
                     : "album";
-              return [{ ...album, releaseType }];
+              return [{ ...ownRelease(album), releaseType }];
             }),
         );
       }
@@ -3917,7 +3939,7 @@ export class YouTubeMusicDataSource extends DataSource {
           .filter((item) => item.item_type === "album")
           .map((item) => this.toAlbum(item))
           .filter((item): item is Album => Boolean(item))
-          .map((album) => ({ ...album, releaseType: "album" as const })),
+          .map((album) => ({ ...ownRelease(album), releaseType: "album" as const })),
       );
     }
     if (playlists.length === 0) {
