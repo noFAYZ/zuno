@@ -9,6 +9,22 @@
 
   <body>
     <div id="root"></div>
+    <script>
+      // The window is transparent, so a script that dies before React mounts is an invisible app (#170).
+      addEventListener("error", (event) => {
+        if (document.getElementById("root").childElementCount) return;
+        const reason = String(event.message || event.error || "a script failed to load");
+        // ES2015 only: this has to parse on the old WebView2 it is reporting.
+        const tauri = window.__TAURI_INTERNALS__;
+        if (tauri) tauri.invoke("frontend_log", {
+          level: "error",
+          context: "main.boot failed",
+          payload: `${reason} ${navigator.userAgent}`,
+        }).catch(() => {});
+        document.body.style.cssText = "background:#090103;color:#fff;font:14px system-ui;padding:32px";
+        document.body.textContent = `Zuno couldn't start: ${reason}. Updating Microsoft Edge WebView2 usually fixes this.`;
+      }, true);
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
