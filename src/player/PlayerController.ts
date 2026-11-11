@@ -205,6 +205,8 @@ export class PlayerController {
   private warmingStream = false;
   private crossfadeSec = 0;
   private gaplessEnabled = true;
+  /** Whether the Rust engine was last told to hand over by itself; see `queueGapless`. */
+  private gaplessQueued = false;
   private stopTransitionTicker: (() => void) | null = null;
   private scrobbleTimerId: number | null = null;
   private playbackSettingsTimerId: ReturnType<typeof setTimeout> | null = null;
@@ -1674,6 +1676,7 @@ export class PlayerController {
     if (!(duration > 0) || !Number.isFinite(remaining) || remaining <= 0) return;
 
     const next = this.peekNextTrack();
+    this.queueGapless(next, remaining);
     if (!next || !this.usesPreloadDeck(next)) return;
 
     if (remaining <= PRELOAD_LEAD_SEC) this.audioEngine.preloadNext(next.id);
@@ -1690,6 +1693,27 @@ export class PlayerController {
     void this.handleTrackEnded().finally(() => {
       this.transitioning = false;
     });
+  }
+
+  /**
+   * Lets the Rust engine start the preloaded next track itself the instant this one runs dry;
+   * waiting for `ended` to come back through here was the pause between gapless tracks (#178).
+   *
+   * Armed only inside the premature-end tolerance, so a stream that dies early still reloads
+   * rather than handing over, and never when the end isn't simply "play the next one".
+   */
+  private queueGapless(next: Track | null, remainingSec: number): void {
+    const target = next
+      && this.crossfadeSec <= 0
+      && remainingSec <= PREMATURE_END_TOLERANCE_SEC
+      && this.playbackOrderMode !== "repeat-one"
+      && this.stopAfterTrack !== this.queue.current
+      && this.audioEngine.hasPreloaded(next.id)
+      ? next.id
+      : null;
+    if (!target && !this.gaplessQueued) return;
+    this.gaplessQueued = target !== null;
+    this.audioEngine.queueGapless(target);
   }
 
   private appendHistory(track: Track): Track[] {

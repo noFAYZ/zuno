@@ -794,6 +794,14 @@ export class AudioEngine {
     logInternalInfo("AudioEngine rust preloaded", { trackId });
   }
 
+  /** Arms the Rust engine's own gapless handover to `videoId`, or disarms it with `null`. */
+  queueGapless(videoId: string | null): void {
+    if (!this.useRustAudio) return;
+    void rustAudio.queueNext(videoId).catch((error: unknown) => {
+      rustAudio.warn("AudioEngine rust queue next failed", error);
+    });
+  }
+
   /** Whether a transition to `videoId` can skip loading entirely. */
   hasPreloaded(videoId: string): boolean {
     if (this.useRustAudio) return this.rustStandbyTrackId === videoId;
