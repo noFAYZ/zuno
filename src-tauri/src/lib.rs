@@ -4636,20 +4636,15 @@ fn native_audio_set_volume(
         .map_err(cache_error)
 }
 
-/**
- * Playback speed.
- *
- * ponytail: this resamples, so it transposes — a song at 1.25x plays a little sharp, where the
- * `<audio>` element corrected the pitch for free. Rate is a podcast feature in a music app and
- * defaults to 1, so it buys a time-stretcher's worth of DSP for very few listeners. Add
- * `signalsmith-stretch` between the decoder and the sink if it turns out to matter.
- */
+/// Playback speed, which keeps pitch, and pitch as a frequency ratio, which keeps speed.
 #[tauri::command(async)]
 fn native_audio_set_rate(
     state: tauri::State<'_, audio::NativeAudio>,
     rate: f32,
+    pitch: Option<f32>,
 ) -> Result<(), CommandError> {
-    state.send(audio::Command::Rate(rate)).map_err(cache_error)
+    let command = audio::Command::Rate { speed: rate, pitch: pitch.unwrap_or(1.0) };
+    state.send(command).map_err(cache_error)
 }
 
 /// Hands playback to the standby deck, over an equal-power crossfade when `fade_ms` is above

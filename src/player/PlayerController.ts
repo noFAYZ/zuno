@@ -322,6 +322,9 @@ export class PlayerController {
     if (settings.playbackRate !== undefined) {
       this.audioEngine.setPlaybackRate(settings.playbackRate);
     }
+    if (settings.pitchSemitones !== undefined) {
+      this.audioEngine.setPitch(settings.pitchSemitones);
+    }
     /*
      * Absent means "leave alone", not "reset".
      *
@@ -688,6 +691,16 @@ export class PlayerController {
     this.audioEngine.setPlaybackRate(rate);
     savePlaybackSettings(this.currentPlaybackSettings());
     this.emit();
+  }
+
+  setPitch(semitones: number): void {
+    this.audioEngine.setPitch(semitones);
+    savePlaybackSettings(this.currentPlaybackSettings());
+    this.emit();
+  }
+
+  getPitch(): number {
+    return this.audioEngine.getPitch();
   }
 
   getPlaybackRate(): number {
@@ -1784,6 +1797,7 @@ export class PlayerController {
       volume: this.state.volume,
       muted: this.state.muted,
       playbackRate: this.audioEngine.getPlaybackRate(),
+      pitchSemitones: this.audioEngine.getPitch(),
       crossfadeSec: this.crossfadeSec,
       gaplessEnabled: this.gaplessEnabled,
     };

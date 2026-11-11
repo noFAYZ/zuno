@@ -54,6 +54,7 @@ symphonia = { version = "0.5", default-features = false, features = ["mkv", "ogg
 opus = "0.3.1"
 # Was macOS-only (the session encryption key); account slot ids need it on every platform now.
 rand = "0.8"
+rodio-wsola = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aes-gcm = "0.10"

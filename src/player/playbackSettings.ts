@@ -10,6 +10,8 @@ export interface PlaybackSettings {
   muted: boolean;
   /** 1 is normal speed. Optional so settings written before this existed still load. */
   playbackRate?: number;
+  /** Semitones, Rust engine only. Optional so older settings still load. */
+  pitchSemitones?: number;
   /**
    * Seconds of overlap between tracks. 0 turns crossfading off, which is the default because
    * it changes how every album transition sounds and should be asked for.
@@ -49,6 +51,7 @@ export function savePlaybackSettings(settings: PlaybackSettings): void {
     volume: Math.min(1, Math.max(0, settings.volume)),
     muted: settings.muted,
     playbackRate: Math.min(4, Math.max(0.25, settings.playbackRate ?? 1)),
+    pitchSemitones: Math.min(12, Math.max(-12, Math.round(settings.pitchSemitones ?? 0))),
     crossfadeSec: Math.min(MAX_CROSSFADE_SEC, Math.max(0, settings.crossfadeSec ?? 0)),
     gaplessEnabled: settings.gaplessEnabled ?? true,
   };

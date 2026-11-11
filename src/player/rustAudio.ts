@@ -131,9 +131,10 @@ export function setVolume(volume: number, muted: boolean): Promise<void> {
   return invoke("native_audio_set_volume", { volume, muted });
 }
 
-export function setRate(next: number): Promise<void> {
+/** Speed keeps pitch; `pitch` is a frequency ratio that keeps speed. */
+export function setRate(next: number, pitch = 1): Promise<void> {
   rate = next;
-  return invoke("native_audio_set_rate", { rate: next });
+  return invoke("native_audio_set_rate", { rate: next, pitch });
 }
 
 export type OutputDevice = { id: string; name: string; isDefault: boolean };

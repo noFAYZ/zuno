@@ -18,6 +18,7 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -112,6 +113,144 @@ impl Source for Respan {
 
     fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
         self.inner.try_seek(position)
+    }
+}
+
+/// Speed over pitch, as f32 bits: what `Stretch` time-stretches by so the two are independent.
+static TEMPO: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+/// Decoded samples a deck has consumed: its position in song time, whatever the speed.
+type Clock = Arc<AtomicU64>;
+
+/// Counts what the decoder hands out. rodio's own position is wall time once speed isn't 1x.
+struct Clocked {
+    inner: BoxedSource,
+    clock: Clock,
+    samples_per_sec: f64,
+}
+
+impl Iterator for Clocked {
+    type Item = rodio::Sample;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        self.clock.fetch_add(1, Ordering::Relaxed);
+        Some(sample)
+    }
+}
+
+impl Source for Clocked {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        self.inner.try_seek(position)?;
+        let samples = position.as_secs_f64() * self.samples_per_sec;
+        self.clock.store(samples as u64, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+enum Stage {
+    Direct(Clocked),
+    Stretched(Box<rodio_wsola::Wsola<Clocked>>),
+    Swapping,
+}
+
+/**
+ * Time-stretches by `TEMPO` without changing pitch, so speed and pitch are separate (#186).
+ *
+ * Pitch is the player's resampling speed; this undoes its tempo change and applies the chosen
+ * one. At 1 it steps out of the way entirely rather than running WSOLA for nothing.
+ *
+ * ponytail: WSOLA smears transients a little at large ratios. Swap in a phase-vocoder stretcher
+ * (signalsmith-stretch, which needs bindgen) if that ever matters.
+ */
+struct Stretch {
+    stage: Stage,
+    tempo: f32,
+    channels: rodio::ChannelCount,
+    sample_rate: rodio::SampleRate,
+    frame_position: usize,
+}
+
+impl Stretch {
+    fn new(inner: Clocked) -> Self {
+        let (channels, sample_rate) = (inner.channels(), inner.sample_rate());
+        Self { stage: Stage::Direct(inner), tempo: 1.0, channels, sample_rate, frame_position: 0 }
+    }
+
+    fn retarget(&mut self, tempo: f32) {
+        self.tempo = tempo;
+        self.stage = match std::mem::replace(&mut self.stage, Stage::Swapping) {
+            Stage::Stretched(stretched) if tempo == 1.0 => Stage::Direct((*stretched).into_inner()),
+            Stage::Stretched(mut stretched) => {
+                stretched.set_speed(tempo);
+                Stage::Stretched(stretched)
+            }
+            Stage::Direct(direct) if tempo != 1.0 => {
+                Stage::Stretched(Box::new(rodio_wsola::Wsola::new(direct, tempo)))
+            }
+            stage => stage,
+        };
+    }
+}
+
+impl Iterator for Stretch {
+    type Item = rodio::Sample;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        // Only between frames: swapping mid-frame would hand left samples to the right channel.
+        if self.frame_position == 0 {
+            let tempo = f32::from_bits(TEMPO.load(Ordering::Relaxed));
+            if tempo != self.tempo {
+                self.retarget(tempo);
+            }
+        }
+        let sample = match &mut self.stage {
+            Stage::Direct(direct) => direct.next(),
+            Stage::Stretched(stretched) => stretched.next(),
+            Stage::Swapping => None,
+        }?;
+        self.frame_position = (self.frame_position + 1) % self.channels.get() as usize;
+        Some(sample)
+    }
+}
+
+impl Source for Stretch {
+    fn current_span_len(&self) -> Option<usize> {
+        match &self.stage {
+            Stage::Direct(direct) => direct.current_span_len(),
+            _ => None,
+        }
+    }
+    fn channels(&self) -> rodio::ChannelCount {
+        self.channels
+    }
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+    /// `position` is in stretched time, the way rodio's own speed adapter passes it on.
+    fn try_seek(&mut self, position: Duration) -> Result<(), rodio::source::SeekError> {
+        match &mut self.stage {
+            Stage::Direct(direct) => direct.try_seek(position),
+            Stage::Stretched(stretched) => stretched.try_seek(position),
+            Stage::Swapping => Ok(()),
+        }
     }
 }
 
@@ -272,6 +411,8 @@ struct Deck {
     track_id: Option<String>,
     duration_sec: f64,
     health: Option<DeckHealth>,
+    clock: Clock,
+    samples_per_sec: f64,
 }
 
 impl Deck {
@@ -280,6 +421,11 @@ impl Deck {
         self.track_id = None;
         self.duration_sec = 0.0;
         self.health = None;
+        self.clock = Clock::default();
+    }
+
+    fn position_sec(&self) -> f64 {
+        self.clock.load(Ordering::Relaxed) as f64 / self.samples_per_sec.max(1.0)
     }
 
     /// False only when a probe exists and says the source is broken. No probe means healthy.
@@ -318,7 +464,11 @@ pub(crate) enum Command {
         volume: f32,
         muted: bool,
     },
-    Rate(f32),
+    /// Speed keeps pitch, and pitch keeps speed (#186). Both are ratios, 1 being unchanged.
+    Rate {
+        speed: f32,
+        pitch: f32,
+    },
     /// Reopens the stream on a different device, `None` for the OS default. Both decks are lost
     /// with the old stream — the caller reloads whatever was playing, the same way a track
     /// recovers from a dead connection elsewhere in this pipeline.
@@ -708,6 +858,8 @@ fn open_output(
         track_id: None,
         duration_sec: 0.0,
         health: None,
+        clock: Clock::default(),
+        samples_per_sec: 1.0,
     };
     let decks = [deck(), deck()];
     Ok((stream, decks))
@@ -761,7 +913,8 @@ fn run(
         active: 0,
         volume: 1.0,
         muted: false,
-        rate: 1.0,
+        speed: 1.0,
+        pitch: 1.0,
         playing: false,
         fade: None,
     };
@@ -816,7 +969,8 @@ struct Engine {
     active: usize,
     volume: f32,
     muted: bool,
-    rate: f32,
+    speed: f32,
+    pitch: f32,
     playing: bool,
     fade: Option<Fade>,
 }
@@ -884,8 +1038,16 @@ impl Engine {
                 // Replacing the player drops the old one, which stops it.
                 deck.sink = paused_player(stream.mixer());
                 deck.sink.set_volume(volume);
-                deck.sink.set_speed(self.rate);
-                deck.sink.append(Respan::new(source));
+                deck.sink.set_speed(self.pitch);
+                deck.clock = Clock::default();
+                deck.samples_per_sec =
+                    source.sample_rate().get() as f64 * source.channels().get() as f64;
+                let clocked = Clocked {
+                    inner: source,
+                    clock: deck.clock.clone(),
+                    samples_per_sec: deck.samples_per_sec,
+                };
+                deck.sink.append(Respan::new(Box::new(Stretch::new(clocked))));
                 deck.track_id = Some(track_id);
                 deck.duration_sec = duration;
                 deck.health = health;
@@ -934,7 +1096,8 @@ impl Engine {
                 self.playing = false;
             }
             Command::Seek(seconds) => {
-                let target = Duration::from_secs_f64(seconds.max(0.0));
+                // The speed and stretch adapters each scale it back up on the way down.
+                let target = Duration::from_secs_f64(seconds.max(0.0) / self.speed as f64);
                 if let Err(error) = self.decks[self.active].sink.try_seek(target) {
                     eprintln!("[internal][tauri][warn] native audio seek failed: {error}");
                 }
@@ -947,10 +1110,14 @@ impl Engine {
                     self.decks[self.active].sink.set_volume(self.output_volume());
                 }
             }
-            Command::Rate(rate) => {
-                self.rate = rate.clamp(0.25, 4.0);
+            Command::Rate { speed, pitch } => {
+                self.speed = speed.clamp(0.25, 4.0);
+                self.pitch = pitch.clamp(0.5, 2.0);
+                // Pitch resamples, which changes tempo too; the stretch makes up the rest.
+                let tempo = (self.speed / self.pitch).clamp(0.25, 8.0);
+                TEMPO.store(tempo.to_bits(), Ordering::Relaxed);
                 for deck in &self.decks {
-                    deck.sink.set_speed(self.rate);
+                    deck.sink.set_speed(self.pitch);
                 }
             }
             Command::Transition { track_id, fade_ms, reply } => {
@@ -981,7 +1148,7 @@ impl Engine {
                 self.decks[standby]
                     .sink
                     .set_volume(if fade_ms > 0 { 0.0 } else { target });
-                self.decks[standby].sink.set_speed(self.rate);
+                self.decks[standby].sink.set_speed(self.pitch);
                 self.decks[standby].sink.play();
 
                 let outgoing = self.active;
@@ -1136,7 +1303,7 @@ impl Engine {
             "native-audio-position",
             PositionEvent {
                 track_id,
-                position_sec: self.decks[index].sink.get_pos().as_secs_f64(),
+                position_sec: self.decks[index].position_sec(),
                 duration_sec: self.decks[index].duration_sec,
             },
         );
@@ -1206,6 +1373,33 @@ mod tests {
             speed.set_factor(2.0)
         }));
         out.count()
+    }
+
+    // One test, since `TEMPO` is process-wide and tests run in parallel.
+    #[test]
+    fn stretch_changes_length_not_pitch_and_steps_aside_at_one() {
+        let stretched = |tempo: f32| {
+            let clock = Clock::default();
+            let clocked = Clocked {
+                inner: Box::new(Unspanned(48_000)),
+                clock: clock.clone(),
+                samples_per_sec: 48_000.0,
+            };
+            TEMPO.store(tempo.to_bits(), Ordering::Relaxed);
+            let stretch = Stretch::new(clocked);
+            let rate = stretch.sample_rate().get();
+            let produced = stretch.count();
+            (produced, rate, clock.load(Ordering::Relaxed))
+        };
+
+        let (produced, rate, clock) = stretched(2.0);
+        assert!((20_000..28_000).contains(&produced), "1 s at 2x lasts ~0.5 s: {produced}");
+        assert_eq!(rate, 48_000, "the rate, and so the pitch, is untouched");
+        assert_eq!(clock, 48_000, "the clock counts song time, not output");
+
+        let (produced, _, _) = stretched(1.0);
+        TEMPO.store(1.0f32.to_bits(), Ordering::Relaxed);
+        assert_eq!(produced, 48_000, "at 1x every sample passes straight through");
     }
 
     #[test]
