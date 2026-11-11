@@ -58,6 +58,8 @@ interface TrackArtworkProps {
    * instead of ~0.06 MB, and a list holds fifty of them.
    */
   size?: number;
+  /** The rendered image element, for consumers that paint it elsewhere (see `BlurredArtwork`). */
+  onImageLoad?: (image: HTMLImageElement) => void;
   variant?: "track" | "album" | "artist" | "playlist";
 }
 
@@ -69,6 +71,7 @@ export function TrackArtwork({
   preferProxy = false,
   retryOnError = false,
   size,
+  onImageLoad,
   variant = "track",
 }: TrackArtworkProps) {
   // A downloaded song's cover is read from disk, so it shows offline and skips the network online.
@@ -177,7 +180,7 @@ export function TrackArtwork({
       // inside another mount's failure window sat on the fallback icon for up to
       // FAILURE_TTL_MS with no sign anywhere of why. Debug, not warn — the failure itself was
       // already logged by whichever attempt actually made the request.
-      logInternalDebug("TrackArtwork withheld, source recently failed", { cacheKey, variant });
+      logInternalDebug("TrackArtwork withheld, source recently failed", { cacheKey });
       return;
     }
 
@@ -286,8 +289,9 @@ export function TrackArtwork({
            * fewer thing that can leave a placeholder behind.
            */
           referrerPolicy="no-referrer"
-          onLoad={() => {
+          onLoad={(event) => {
             setLoadedArtworkUrl(currentArtworkUrl);
+            onImageLoad?.(event.currentTarget);
             /*
              * Record the candidate that actually rendered, keyed by source URL and size. The
              * retry suffix is stripped: it exists only to bust a failed request, and caching

@@ -3,6 +3,7 @@ import type { Lyrics, LyricsQuery, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { isPrematureEnd } from "./prematureEnd";
 import { AudioEngine, isEmbedRestrictedPlaybackError } from "./AudioEngine";
+import * as rustAudio from "./rustAudio";
 import { Queue } from "./Queue";
 import { NavigationCoalescer } from "./navigationCoalescer";
 import { recordPlay } from "./playHistory";
@@ -210,7 +211,7 @@ export class PlayerController {
   private warmingStream = false;
   private crossfadeSec = 0;
   private gaplessEnabled = true;
-  private transitionTimerId: number | null = null;
+  private stopTransitionTicker: (() => void) | null = null;
   private scrobbleTimerId: number | null = null;
   private playbackSettingsTimerId: ReturnType<typeof setTimeout> | null = null;
   private transitioning = false;
@@ -1435,12 +1436,6 @@ export class PlayerController {
   }
 
   private setState(partial: Partial<PlayerState>) {
-    logInternalDebug("PlayerController.setState", {
-      previousStatus: this.state.status,
-      nextStatus: partial.status ?? this.state.status,
-      hasError: Boolean(partial.error),
-      trackId: partial.currentTrack?.id ?? this.state.currentTrack?.id ?? null,
-    });
     this.state = { ...this.state, ...partial };
     this.syncTransitionTicker();
     this.syncScrobbleTicker();
@@ -1624,17 +1619,21 @@ export class PlayerController {
       && this.isTabActive
       && (this.gaplessEnabled || this.crossfadeSec > 0);
 
-    if (wanted === (this.transitionTimerId !== null)) return;
+    if (wanted === (this.stopTransitionTicker !== null)) return;
 
     if (!wanted) {
-      if (this.transitionTimerId !== null) globalThis.clearInterval(this.transitionTimerId);
-      this.transitionTimerId = null;
+      this.stopTransitionTicker?.();
+      this.stopTransitionTicker = null;
       return;
     }
-    this.transitionTimerId = globalThis.setInterval(
-      () => this.onTransitionTick(),
-      TRANSITION_TICK_MS,
-    );
+    // Rust's position events keep firing while the window is hidden; a silent hidden page's
+    // timers are throttled to about once a minute, which would miss every preload and crossfade.
+    if (this.audioEngine.usesRustAudio()) {
+      this.stopTransitionTicker = rustAudio.onPosition(() => this.onTransitionTick());
+      return;
+    }
+    const intervalId = globalThis.setInterval(() => this.onTransitionTick(), TRANSITION_TICK_MS);
+    this.stopTransitionTicker = () => globalThis.clearInterval(intervalId);
   }
 
   /**
@@ -1707,15 +1706,13 @@ export class PlayerController {
     for (const listener of this.listeners) {
       listener();
     }
-    
-    // Update Discord RPC presence
     this.updateDiscordPresence();
   }
 
   private updateDiscordPresence() {
+    // Only the tab that owns playback speaks for it; an idle background tab must not clear it.
+    if (!this.isTabActive) return;
     const currentTrack = this.state.currentTrack;
-    logInternalDebug("updateDiscordPresence", { status: this.state.status, hasTrack: !!currentTrack });
-    
     if (!currentTrack || (this.state.status !== "playing" && this.state.status !== "paused")) {
       void DiscordRpcService.syncPresence(null, this.state.status);
       return;

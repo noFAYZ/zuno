@@ -115,40 +115,21 @@ function normalizeError(error: unknown): Record<string, unknown> | unknown {
 }
 
 function writeInternalLog(level: LogLevel, context: string, extra?: Record<string, unknown>) {
+  // Debug lines are a development aid; in release they cost a sanitize, a stringify and an IPC hop each.
+  if (level === "debug" && !import.meta.env?.DEV) return;
   sequence += 1;
-  const payload = {
+  const payloadText = safeStringify(sanitizeForLog({
     timestamp: new Date().toISOString(),
     sessionId,
     sequence,
     context,
     ...extra,
-  };
-  const safePayload = sanitizeForLog(payload);
-  const payloadText = safeStringify(safePayload);
-  void invoke("frontend_log", {
-    level,
-    context,
-    payload: payloadText,
-  }).catch(() => {
+  }));
+  void invoke("frontend_log", { level, context, payload: payloadText }).catch(() => {
     // Logging must never interrupt the application flow.
   });
-
-  if (level === "debug") {
-    console.debug(`[internal][debug] ${context}`, payloadText, safePayload);
-    return;
-  }
-
-  if (level === "info") {
-    console.info(`[internal][info] ${context}`, payloadText, safePayload);
-    return;
-  }
-
-  if (level === "warn") {
-    console.warn(`[internal][warn] ${context}`, payloadText, safePayload);
-    return;
-  }
-
-  console.error(`[internal][error] ${context}`, payloadText, safePayload);
+  // Text only: a logged object is retained by the console buffer for as long as the page lives.
+  console[level](`[internal][${level}] ${context}`, payloadText);
 }
 
 export function logInternalDebug(context: string, extra?: Record<string, unknown>) {

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check": "node scripts/run-checks.mjs",
-    "verify": "npm run typecheck && npm run check",
+    "lint": "eslint src --max-warnings 0",
+    "verify": "npm run typecheck && npm run lint && npm run check",
     "tauri": "tauri"
   },
   "dependencies": {
@@ -35,7 +36,10 @@
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@typescript-eslint/parser": "^8.72.2",
     "@vitejs/plugin-react": "^4.6.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"

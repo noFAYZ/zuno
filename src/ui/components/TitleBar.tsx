@@ -32,7 +32,8 @@ import { FloatingPanel } from "./FloatingPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { useToolbarItemVisible } from "../settings/toolbarItems";
 import { motion } from "motion/react";
-import appIcon from "../../../assets/img/Logo.png";
+// 72px: shown at 24px, and the 2000px original decoded to ~16 MB of bitmap for it.
+import appIcon from "../../../assets/img/logo-72.png";
 
 interface TitleBarProps {
   tabs: Tab[];

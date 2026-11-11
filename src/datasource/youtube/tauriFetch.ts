@@ -1,11 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logInternalDebug, logInternalError, logInternalInfo } from "../../internal/logging";
-import { fromBase64, toBase64 } from "../../internal/base64";
+import { toBase64 } from "../../internal/base64";
+import { decodeFrame } from "../../internal/ipcFrame";
 
-type ProxyHttpResponse = {
+type ProxyHttpMeta = {
   status: number;
   headers: Record<string, string>;
-  body_base64: string;
   /** Present only when the response rotated the session cookie. */
   cookie?: string;
 };
@@ -73,46 +73,6 @@ function normalizeUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.toString();
   return input.url;
-}
-
-function getSafeHeaders(headers: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => {
-      const normalizedKey = key.toLowerCase();
-      if (
-        normalizedKey === "authorization"
-        || normalizedKey === "cookie"
-        || normalizedKey === "set-cookie"
-      ) {
-        return [key, "[redacted]"];
-      }
-      return [key, value];
-    }),
-  );
-}
-
-function summarizeRequestBody(bodyBase64: string | undefined): Record<string, unknown> | null {
-  if (!bodyBase64) return null;
-  try {
-    const text = new TextDecoder().decode(fromBase64(bodyBase64));
-    const json = JSON.parse(text) as Record<string, unknown>;
-    const context = json.context as {
-      client?: { clientName?: string; clientVersion?: string };
-    } | undefined;
-    return {
-      byteLength: text.length,
-      topLevelKeys: Object.keys(json),
-      browseId: json.browseId,
-      hasContinuation: typeof json.continuation === "string",
-      clientName: context?.client?.clientName,
-      clientVersion: context?.client?.clientVersion,
-    };
-  } catch {
-    return {
-      byteLength: fromBase64(bodyBase64).byteLength,
-      format: "non-json",
-    };
-  }
 }
 
 function getRequestUrl(inputUrl: string, headers: Record<string, string>): string {
@@ -253,53 +213,36 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
   const body_base64 = await buildBodyBase64(input, init);
   const url = getRequestUrl(normalizeUrl(input), headers);
 
-  /*
-   * Debug, not info, and without the two derived URL fields.
-   *
-   * Every network call the app makes came through here at info level, so a five-minute session
-   * wrote a hundred-odd of these — each one parsing `url` twice more to produce a hostname and
-   * a path already spelled out in the `url` field beside them, then sanitizing, stringifying,
-   * crossing the IPC boundary and hitting the disk. The log reached 163 KB in those five
-   * minutes, which is what buries the lines somebody is actually reading.
-   */
-  logInternalDebug("tauriFetch.request", {
-    method,
-    url,
-    headerCount: Object.keys(headers).length,
-    hasBody: Boolean(body_base64),
-    headers: getSafeHeaders(headers),
-    bodySummary: summarizeRequestBody(body_base64),
-  });
+  logInternalDebug("tauriFetch.request", { method, url });
 
+  const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  signal?.throwIfAborted();
   try {
-    const proxyResponse = await invoke<ProxyHttpResponse>("proxy_http_request", {
-      input: {
-        url,
-        method,
-        headers,
-        body_base64,
-        timeout_ms: init?.timeoutMs,
-      },
+    const request = invoke<ArrayBuffer>("proxy_http_request", {
+      input: { url, method, headers, body_base64, timeout_ms: init?.timeoutMs },
     });
+    // Rust finishes the request either way; an abort only stops the caller waiting on it.
+    const frame = await (signal
+      ? Promise.race([request, new Promise<never>((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      })])
+      : request);
+    const { meta, body } = decodeFrame<ProxyHttpMeta>(frame);
 
-    if (!proxyResponse) {
-      throw new Error("Tauri proxy_http_request returned undefined response");
-    }
-
-    if (proxyResponse.cookie) {
-      liveCookie = proxyResponse.cookie;
+    if (meta.cookie) {
+      liveCookie = meta.cookie;
     }
 
     // Only for requests that carried credentials: the download client is deliberately
     // anonymous, and a 401 there says nothing about the user's session.
-    if (proxyResponse.status === 401 && headers.cookie) {
+    if (meta.status === 401 && headers.cookie) {
       logInternalInfo("tauriFetch.authRejected", { url });
       onAuthRejected?.();
     }
 
     const authenticatedApiCall = headers.cookie
       && new URL(url).pathname.startsWith("/youtubei/");
-    if (authenticatedApiCall && proxyResponse.status >= 200 && proxyResponse.status < 300) {
+    if (authenticatedApiCall && meta.status >= 200 && meta.status < 300) {
       const now = Date.now();
       // Throttled: this fires on every API call, and the UI only needs it to be roughly current.
       if (now - lastConfirmedAt >= 30_000) {
@@ -308,39 +251,23 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
       }
     }
 
-    const bodyBytes = fromBase64(proxyResponse.body_base64);
-    if (proxyResponse.status >= 400) {
-      logInternalError("tauriFetch.http error", new Error(`HTTP ${proxyResponse.status}`), {
+    if (meta.status >= 400) {
+      logInternalError("tauriFetch.http error", new Error(`HTTP ${meta.status}`), {
         method,
         url,
-        responseBody: new TextDecoder().decode(bodyBytes).slice(0, 1000),
+        responseBody: new TextDecoder().decode(body.subarray(0, 1000)),
       });
     }
     logInternalDebug("tauriFetch.response", {
-      method,
       url,
-      status: proxyResponse.status,
-      responseHeaderCount: Object.keys(proxyResponse.headers).length,
-      /*
-       * The count, not the headers. Response headers were the single largest thing in the log
-       * — `alt-svc` and `cf-ray` alone run to hundreds of characters per request — and unlike
-       * the *request* headers above they carry nothing about the auth state anyone opens this
-       * file to investigate. `responseBytes` below is what that investigation actually reads.
-       */
-      responseBytes: bodyBytes.byteLength,
+      status: meta.status,
+      responseBytes: body.byteLength,
       durationMs: Math.round(performance.now() - startedAt),
-      success: proxyResponse.status >= 200 && proxyResponse.status < 300,
     });
-    const responseBody = proxyResponse.status === 204
-      || proxyResponse.status === 205
-      || proxyResponse.status === 304
-      ? null
-      : bodyBytes;
-    return new Response(responseBody, {
-      status: proxyResponse.status,
-      headers: proxyResponse.headers,
-    });
+    const nullBody = meta.status === 204 || meta.status === 205 || meta.status === 304;
+    return new Response(nullBody ? null : body, { status: meta.status, headers: meta.headers });
   } catch (error) {
+    if (signal?.aborted) throw error;
     logInternalError("tauriFetch.invoke failed", error, {
       method,
       url,

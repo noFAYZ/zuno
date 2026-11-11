@@ -23,7 +23,6 @@ tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-localhost = "2"
 tauri-plugin-single-instance = "2"
-portpicker = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "stream"] }
@@ -61,6 +60,8 @@ objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", features = ["NSData", "NSDictionary", "NSGeometry", "NSObject", "NSString", "NSValue", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# Already in the tree via wry; declared to reach ICoreWebView2_19 (memory target level).
+webview2-com = "0.38"
 windows = { version = "0.61.3", features = [
   "Foundation",
   "Media",
@@ -80,3 +81,9 @@ windows = { version = "0.61.3", features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 souvlaki = "0.7"
 
+
+# Smaller binary, less mapped code. No `panic = "abort"`: an audio-thread panic must not kill the app.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
