@@ -177,6 +177,8 @@ export class PlayerController {
   private handlingTrackEnd = false;
   /** The track already reloaded once after ending early, so a second failure gives up. */
   private prematureEndTrackId: string | null = null;
+  /** The track whose Rust stream ended early even after a fresh URL; it plays on the IFrame deck. */
+  private streamDiedTrackId: string | null = null;
   private pendingSeekTime: number | null = null;
   private radioQueueRequestId = 0;
   /*
@@ -916,13 +918,25 @@ export class PlayerController {
      * problem, and looping on it is worse for the listener than moving to the next one.
      */
     if (this.prematureEndTrackId === track.id) {
-      logInternalWarn("PlayerController.prematureEnd retry failed, advancing", {
+      this.prematureEndTrackId = null;
+      /*
+       * Googlevideo refusing every range past the head chunk ends every track a few seconds in,
+       * so advancing skipped the whole queue (#188). Google's own player can't be refused that way.
+       */
+      const canUseIframe = this.audioEngine.usesRustAudio()
+        && !isTrackDownloaded(track.id)
+        && this.streamDiedTrackId !== track.id;
+      logInternalWarn(`PlayerController.prematureEnd retry failed, ${canUseIframe ? "using the YouTube player" : "advancing"}`, {
         trackId: track.id,
         positionSec: Math.round(position),
         durationSec: Math.round(duration),
       });
-      this.prematureEndTrackId = null;
-      return false;
+      if (!canUseIframe) return false;
+      this.streamDiedTrackId = track.id;
+      this.discardWarmedStream(track.id);
+      await this.playTrackById(track.id);
+      if (position > 0 && this.loadedTrackId === track.id) await this.seekTo(position);
+      return true;
     }
 
     this.prematureEndTrackId = track.id;
@@ -1344,6 +1358,9 @@ export class PlayerController {
       const canFallBackToNative = !useNativeAudio && !isDownloaded;
 
       try {
+        if (canFallBackToIframe && this.streamDiedTrackId === track.id) {
+          throw new Error("Its stream ended early twice.");
+        }
         const audioData = useNativeAudio
           ? warmed ?? await this.dataSource.getStreamData?.(track)
           : undefined;
