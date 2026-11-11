@@ -130,6 +130,8 @@ const LEGACY_ACCOUNT_SLOT_ID: &str = "legacy-primary-account";
 const YOUTUBE_COOKIE_ENCRYPTION_KEY_USER: &str = "youtube-music-cookie-encryption-key-v1";
 #[cfg(target_os = "macos")]
 const YOUTUBE_COOKIE_ENCRYPTED_FILE: &str = "youtube-music-session-v1.bin";
+#[cfg(windows)]
+const YOUTUBE_COOKIE_DPAPI_FILE: &str = "youtube-music-session-v1.dpapi";
 const YOUTUBE_LOGIN_WINDOW: &str = "youtube-music-login";
 /// The sign-in window holds two webviews: a read-only address bar on top and Google below.
 const YOUTUBE_LOGIN_ADDRESS_BAR: &str = "youtube-music-login-address";
@@ -1898,8 +1900,96 @@ fn save_youtube_music_cookie(app: &tauri::AppHandle, cookie: &str) -> Result<(),
 }
 
 #[cfg(not(target_os = "macos"))]
-fn save_youtube_music_cookie(_app: &tauri::AppHandle, cookie: &str) -> Result<(), CommandError> {
-    save_youtube_music_cookie_entries(cookie)
+fn save_youtube_music_cookie(app: &tauri::AppHandle, cookie: &str) -> Result<(), CommandError> {
+    let saved = save_youtube_music_cookie_entries(cookie);
+    #[cfg(windows)]
+    {
+        let path = dpapi_session_file(app)?;
+        let error = match saved {
+            // Credential Manager holds it again; a fallback copy would only go stale.
+            Ok(()) => {
+                let _ = fs::remove_file(&path);
+                return Ok(());
+            }
+            Err(error) => error.message,
+        };
+        eprintln!("[internal][tauri][warn] credential manager refused the session ({error}); using the DPAPI file");
+        let encrypted = dpapi(cookie.as_bytes(), true).map_err(|dpapi_error| CommandError {
+            message: format!("{error}; DPAPI fallback failed: {dpapi_error}"),
+        })?;
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, encrypted)
+            .and_then(|()| replace_file(&temp_path, &path))
+            .map_err(|io_error| CommandError {
+                message: format!("{error}; DPAPI session save failed: {io_error}"),
+            })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        saved
+    }
+}
+
+/// Where the session goes when Credential Manager refuses a write, as some machines do with
+/// "Windows error code 8" (#171). DPAPI ties the file to this Windows user, as the vault would.
+#[cfg(windows)]
+fn dpapi_session_file(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
+    let dir = app.path().app_local_data_dir().map_err(|error| CommandError {
+        message: format!("application data directory unavailable: {error}"),
+    })?;
+    fs::create_dir_all(&dir).map_err(|error| CommandError {
+        message: format!("session directory creation failed: {error}"),
+    })?;
+    Ok(dir.join(YOUTUBE_COOKIE_DPAPI_FILE))
+}
+
+#[cfg(windows)]
+fn dpapi(data: &[u8], protect: bool) -> Result<Vec<u8>, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+    let input = CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr().cast_mut() };
+    let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+    unsafe {
+        if protect {
+            CryptProtectData(&input, PCWSTR::null(), None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut output)
+        } else {
+            CryptUnprotectData(&input, None, None, None, None, CRYPTPROTECT_UI_FORBIDDEN, &mut output)
+        }
+        .map_err(|error| error.to_string())?;
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
+        Ok(bytes)
+    }
+}
+
+/// The fallback session, if there is one. A file this user can no longer decrypt (the profile
+/// was reset) is dropped, so the next sign-in starts clean instead of failing on it forever.
+#[cfg(windows)]
+fn load_dpapi_session(app: &tauri::AppHandle) -> Result<Option<String>, CommandError> {
+    let path = dpapi_session_file(app)?;
+    let encrypted = match fs::read(&path) {
+        Ok(encrypted) => encrypted,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CommandError { message: format!("DPAPI session load failed: {error}") })
+        }
+    };
+    match dpapi(&encrypted, false).map(String::from_utf8) {
+        Ok(Ok(cookie)) => Ok(Some(cookie)),
+        Ok(Err(error)) => discard_dpapi_session(&path, &error.to_string()),
+        Err(error) => discard_dpapi_session(&path, &error),
+    }
+}
+
+#[cfg(windows)]
+fn discard_dpapi_session(path: &Path, reason: &str) -> Result<Option<String>, CommandError> {
+    eprintln!("[internal][tauri][warn] discarding unreadable DPAPI session: {reason}");
+    let _ = fs::remove_file(path);
+    Ok(None)
 }
 
 fn delete_youtube_music_cookie_entries() -> Result<(), CommandError> {
@@ -2074,8 +2164,15 @@ fn read_stored_youtube_music_cookie(app: &tauri::AppHandle) -> Result<Option<Str
 
     #[cfg(not(target_os = "macos"))]
     {
+        let stored = load_youtube_music_cookie_entries();
+        #[cfg(windows)]
+        if !matches!(stored, Ok(Some(_))) {
+            if let Some(cookie) = load_dpapi_session(app)? {
+                return Ok(Some(cookie));
+            }
+        }
         let _ = app;
-        load_youtube_music_cookie_entries()
+        stored
     }
 }
 
@@ -5040,6 +5137,16 @@ mod tests {
     use std::io::{Read, Seek, SeekFrom};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    // The #171 fallback: only this Windows user can open the file, and garbage is refused.
+    #[cfg(windows)]
+    #[test]
+    fn dpapi_round_trips_and_rejects_foreign_bytes() {
+        let sealed = super::dpapi(b"SAPISID=abc", true).unwrap();
+        assert_ne!(sealed.as_slice(), b"SAPISID=abc");
+        assert_eq!(super::dpapi(&sealed, false).unwrap(), b"SAPISID=abc");
+        assert!(super::dpapi(b"not a dpapi blob", false).is_err());
+    }
 
     // Replacing must not depend on deleting the old file first, or a failed save loses it (#155).
     #[test]
