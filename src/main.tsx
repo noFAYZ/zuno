@@ -33,7 +33,6 @@ import {
 } from "./ui/settings/mainWindowGeometry";
 import { applyPlatformAttributes, detectTilingWindowManager } from "./ui/platform";
 import { hydrateArtworkCache } from "./internal/artworkCache";
-import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
 import { hydratePlayHistory } from "./player/playHistory";
 import { hydrateSessionRestoreSetting } from "./ui/settings/sessionRestore";
@@ -94,16 +93,6 @@ void Promise.all([
 ]).catch((error) => {
   logInternalError("settings hydration failed", error);
 });
-
-// Initialize Discord RPC (non-blocking)
-logInternalInfo("[Discord RPC] Initializing Discord RPC service");
-try {
-  void DiscordRpcService.init().catch((error) => {
-    logInternalError("[Discord RPC] initialization error", error);
-  });
-} catch (error) {
-  logInternalError("[Discord RPC] failed to initialize", error);
-}
 
 window.addEventListener("error", (event) => {
   logInternalError("window.error", event.error ?? event.message, {

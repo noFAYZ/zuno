@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { Playlist, Track } from "../datasource/types";
 import { logInternalInfo } from "../internal/logging";
 
@@ -57,35 +56,12 @@ export async function exportPlaylist(
   playlist: Playlist,
   tracks: Track[],
 ): Promise<{ path: string; format: "json" | "m3u"; written: number } | null> {
-  const path = await saveDialog({
-    title: `Export ${playlist.title}`,
-    defaultPath: `${sanitizeFileName(playlist.title)}.zuno.json`,
-    filters: [
-      { name: "Zuno playlist", extensions: ["json"] },
-      { name: "M3U playlist", extensions: ["m3u", "m3u8"] },
-    ],
-  });
-  if (!path) return null;
-
-  const isM3u = /\.m3u8?$/i.test(path);
-
-  if (isM3u) {
-    const lines = ["#EXTM3U"];
-    let written = 0;
-    for (const track of tracks) {
-      const target = track.localPath;
-      // A YouTube track has no path an external player could open, so it is skipped rather
-      // than written as a line that silently fails everywhere else.
-      if (!target) continue;
-      lines.push(`#EXTINF:${Math.round(track.durationSec ?? -1)},${track.artist} - ${track.title}`);
-      lines.push(target);
-      written += 1;
-    }
-    await invoke("write_text_file", { path, contents: `${lines.join("\n")}\n` });
-    logInternalInfo("playlistTransfer.export m3u", { written, total: tracks.length });
-    return { path, format: "m3u", written };
-  }
-
+  // A YouTube track has no path an external player could open, so M3U skips it.
+  const m3uTracks = tracks.filter((track) => track.localPath);
+  const m3u = ["#EXTM3U", ...m3uTracks.flatMap((track) => [
+    `#EXTINF:${Math.round(track.durationSec ?? -1)},${track.artist} - ${track.title}`,
+    track.localPath as string,
+  ])].join("\n");
   const payload: ExportedPlaylist = {
     format: "zuno-playlist",
     version: FORMAT_VERSION,
@@ -102,9 +78,21 @@ export async function exportPlaylist(
     })),
   };
 
-  await invoke("write_text_file", { path, contents: JSON.stringify(payload, null, 2) });
-  logInternalInfo("playlistTransfer.export json", { written: tracks.length });
-  return { path, format: "json", written: tracks.length };
+  // Rust shows the dialog and writes the file, so no path ever travels from the webview.
+  const saved = await invoke<{ path: string; format: number } | null>("export_text_file", {
+    title: `Export ${playlist.title}`,
+    fileName: `${sanitizeFileName(playlist.title)}.zuno.json`,
+    formats: [
+      { name: "Zuno playlist", extensions: ["json"], contents: JSON.stringify(payload, null, 2) },
+      { name: "M3U playlist", extensions: ["m3u", "m3u8"], contents: `${m3u}\n` },
+    ],
+  });
+  if (!saved) return null;
+  const result = saved.format === 1
+    ? { path: saved.path, format: "m3u" as const, written: m3uTracks.length }
+    : { path: saved.path, format: "json" as const, written: tracks.length };
+  logInternalInfo("playlistTransfer.export", { format: result.format, written: result.written, total: tracks.length });
+  return result;
 }
 
 export interface ImportedPlaylist {
@@ -181,17 +169,13 @@ function parseM3u(contents: string, fallbackTitle: string): ImportedPlaylist {
 
 /** Reads a playlist file chosen by the user. Returns null when the dialog is dismissed. */
 export async function importPlaylistFile(): Promise<ImportedPlaylist | null> {
-  const selected = await openDialog({
+  const opened = await invoke<{ path: string; contents: string } | null>("import_text_file", {
     title: "Import playlist",
-    multiple: false,
-    filters: [
-      { name: "Playlists", extensions: ["json", "m3u", "m3u8"] },
-    ],
+    filterName: "Playlists",
+    extensions: ["json", "m3u", "m3u8"],
   });
-  const path = Array.isArray(selected) ? selected[0] : selected;
-  if (!path) return null;
-
-  const contents = await invoke<string>("read_text_file", { path });
+  if (!opened) return null;
+  const { path, contents } = opened;
   const fileName = path.split(/[\\/]/).pop() ?? "Imported playlist";
   const baseTitle = fileName.replace(/\.(zuno\.)?(json|m3u8?)$/i, "");
 

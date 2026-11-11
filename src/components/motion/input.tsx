@@ -215,13 +215,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             initial={
               reduce
                 ? { opacity: 0 }
-                : { opacity: 0, y: -4, filter: "blur(4px)" }
+                : { opacity: 0, y: -4 }
             }
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            animate={{ opacity: 1, y: 0 }}
             exit={
               reduce
                 ? { opacity: 0 }
-                : { opacity: 0, y: -4, filter: "blur(4px)" }
+                : { opacity: 0, y: -4 }
             }
             transition={{ duration: 0.2 }}
             className={cn(

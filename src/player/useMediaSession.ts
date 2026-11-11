@@ -13,7 +13,8 @@ type NativeMediaAction =
   | "playPause"
   | "next"
   | "previous"
-  | { action: "seekTo"; positionSec: number };
+  | { action: "seekTo"; positionSec: number }
+  | { action: "setVolume"; volume: number };
 
 const usesNativeWindowsMediaSession =
   isTauri() && /Windows/i.test(navigator.userAgent);
@@ -127,6 +128,7 @@ export function useMediaSession(
       ({ payload }) => {
         if (typeof payload === "object") {
           if (payload.action === "seekTo") void controller.seekTo(payload.positionSec);
+          if (payload.action === "setVolume") void controller.setVolume(payload.volume);
           return;
         }
 

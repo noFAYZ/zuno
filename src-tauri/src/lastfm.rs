@@ -1,4 +1,4 @@
-use crate::{http_client_builder, CommandError, KEYRING_SERVICE};
+use crate::{http_client, CommandError, KEYRING_SERVICE};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -131,11 +131,7 @@ async fn signed_lastfm_post<T: for<'de> Deserialize<'de>>(
     params.insert("api_sig".to_string(), signature);
     params.insert("format".to_string(), "json".to_string());
 
-    let response = http_client_builder()
-        .build()
-        .map_err(|error| CommandError {
-            message: format!("Last.fm client creation failed: {error}"),
-        })?
+    let response = http_client(None)
         .post(LASTFM_API_URL)
         .form(&params)
         .send()
@@ -218,14 +214,14 @@ pub async fn lastfm_complete_auth(token: String) -> Result<LastFmSessionStatus, 
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lastfm_get_session() -> Result<Option<LastFmSessionStatus>, CommandError> {
     Ok(load_stored_session()?.map(|session| LastFmSessionStatus {
         username: session.username,
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn lastfm_disconnect() -> Result<(), CommandError> {
     delete_stored_session()
 }

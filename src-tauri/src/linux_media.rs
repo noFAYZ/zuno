@@ -4,9 +4,17 @@ use souvlaki::{
 };
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Listener, Manager, State};
 
 const MEDIA_CONTROL_EVENT: &str = "linux-media-control";
+/// Emitted by the main window on every volume or mute change; the mini player follows it too.
+const VOLUME_SYNC_EVENT: &str = "player-volume-sync";
+
+#[derive(Deserialize)]
+struct VolumeSync {
+    muted: bool,
+    volume: f64,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +39,7 @@ struct CachedMetadata {
 pub struct LinuxMediaSession {
     controls: Mutex<Option<MediaControls>>,
     metadata: Mutex<Option<CachedMetadata>>,
+    volume: Mutex<Option<f64>>,
 }
 
 impl LinuxMediaSession {
@@ -38,6 +47,19 @@ impl LinuxMediaSession {
         Self {
             controls: Mutex::new(None),
             metadata: Mutex::new(None),
+            volume: Mutex::new(None),
+        }
+    }
+
+    /// Remembers the volume even before MPRIS is up, so the session starts with the right one.
+    fn set_volume(&self, volume: f64) {
+        if let Ok(mut stored) = self.volume.lock() {
+            *stored = Some(volume);
+        }
+        if let Ok(mut controls) = self.controls.lock() {
+            if let Some(controls) = controls.as_mut() {
+                let _ = controls.set_volume(volume);
+            }
         }
     }
 
@@ -83,9 +105,19 @@ impl LinuxMediaSession {
                         }),
                     );
                 }
+                MediaControlEvent::SetVolume(volume) => {
+                    let _ = app_handle.emit(
+                        MEDIA_CONTROL_EVENT,
+                        serde_json::json!({ "action": "setVolume", "volume": volume.clamp(0.0, 1.0) }),
+                    );
+                }
                 _ => {}
             })
             .map_err(|e| e.to_string())?;
+
+        if let Some(volume) = self.volume.lock().ok().and_then(|stored| *stored) {
+            let _ = controls.set_volume(volume);
+        }
 
         *controls_guard = Some(controls);
         Ok(())
@@ -163,4 +195,20 @@ pub fn update_linux_media_session(
         update.artwork_url = Some(format!("file://{}", path.display()));
     }
     state.update(&app, update)
+}
+
+/// Mirrors the app's volume to MPRIS, which is what lets the desktop's media widget show it and
+/// change it (on KDE Plasma, the mouse wheel over the media player tray icon).
+///
+/// It follows the event the app already emits on every volume change, so the published level
+/// always comes from the app itself: a change made from the desktop goes to the app first and
+/// comes back through here, and an in-app change reaches the desktop the same way.
+pub fn mirror_volume(app: &AppHandle) {
+    let handle = app.clone();
+    app.listen(VOLUME_SYNC_EVENT, move |event| {
+        if let Ok(sync) = serde_json::from_str::<VolumeSync>(event.payload()) {
+            let volume = if sync.muted { 0.0 } else { sync.volume };
+            handle.state::<LinuxMediaSession>().set_volume(volume);
+        }
+    });
 }

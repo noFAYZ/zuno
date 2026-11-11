@@ -92,9 +92,11 @@ async function isGeometryOnAnyMonitor(geometry: MainWindowGeometry): Promise<boo
 
 async function saveCurrentMainWindowGeometry(): Promise<void> {
   const win = getCurrentWindow();
+  // Inner size, because that is what `setSize` restores. Saving the outer size grew the
+  // window by the height of the OS frame on every launch with native decorations on.
   const [position, size, isMaximized, isFullscreen] = await Promise.all([
     win.outerPosition(),
-    win.outerSize(),
+    win.innerSize(),
     win.isMaximized(),
     win.isFullscreen(),
   ]);

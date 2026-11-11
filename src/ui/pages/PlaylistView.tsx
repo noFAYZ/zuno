@@ -622,6 +622,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     };
   }, [canReorderTracks, libraryController, playlist]);
 
+  // Every hook runs before the early return: a hook after it changes the hook count between renders.
+  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
+  const selection = useTrackSelection(visibleTracks);
   if (!playlist) return null;
 
   const playPlaylistTrack = async (track: Track) => {
@@ -631,11 +634,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
 
   const isLikedSongs = isLikedSongsId(playlist.id, playlist.kind);
 
-  /*
-   * O(1) membership test instead of scanning the track array on every render — these lists
-   * run to several hundred rows.
-   */
-  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
   const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
 
   /*
@@ -684,8 +682,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     playerController.setShuffleEnabled(true);
     markPlaylistPlayed(playlist.id);
   };
-
-  const selection = useTrackSelection(visibleTracks);
 
   const removeTrackFromList = (removedTrack: Track) => {
     setTracks((current) => current.filter((item) =>

@@ -2,7 +2,7 @@ import { ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } 
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
-import { TrackArtwork } from "./TrackArtwork";
+import { BlurredArtwork } from "./BlurredArtwork";
 import { useAmbientArtwork } from "../stores/ambientArtworkStore";
 import { Sidebar } from "./Sidebar";
 import type { Album, Playlist } from "../../datasource/types";
@@ -75,12 +75,13 @@ export function Layout({
    */
   useLayoutEffect(() => {
     const node = pageContentRef.current;
+    const positions = scrollPositionsRef.current;
     if (!node || !scrollKey) return;
 
-    node.scrollTop = scrollPositionsRef.current.get(scrollKey) ?? 0;
+    node.scrollTop = positions.get(scrollKey) ?? 0;
 
     return () => {
-      scrollPositionsRef.current.set(scrollKey, node.scrollTop);
+      positions.set(scrollKey, node.scrollTop);
     };
   }, [scrollKey]);
   const rightPanelRef = useRef<HTMLDivElement>(null);
@@ -258,27 +259,9 @@ export function Layout({
               aria-hidden="true"
               data-fx="ambient"
             >
-              {/*
-                The blur radius drives the intermediate textures the compositor allocates, and
-                this is one of the largest surfaces in the window. 32px is enough here because
-                the source is a 120px image stretched across the full width — a ~20x upscale is
-                already most of the softness, and the filter only finishes the job.
-
-                `scale-125` is gone for the same reason: the negative insets already extend this
-                well past the clipped box on three sides, so the scale was adding composited
-                area to hide edges that were never reachable.
-              */}
-              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 opacity-40 blur-[32px] saturate-[2]">
-                {/*
-                  Deliberately the smallest variant: this is blurred and dropped to 40% opacity,
-                  so nothing above 120px survives to be seen — it only costs texture.
-                */}
-                <TrackArtwork
-                  className="size-full"
-                  size={120}
-                  artworkUrl={ambientArtwork}
-                  iconSize={0}
-                />
+              {/* Negative insets extend past the clipped box so the wash has no visible edge. */}
+              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 opacity-40">
+                <BlurredArtwork artworkUrl={ambientArtwork} saturate={2} className="size-full" />
               </span>
             </span>
           ) : null}

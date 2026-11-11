@@ -112,20 +112,15 @@ impl Read for BufferReader {
                 return Ok(0);
             }
             if available > self.position {
-                let end = (self.position + out.len()).min(available).min(total) - 1;
-                let bytes = {
-                    let guard = self
-                        .buffer
-                        .lock()
-                        .map_err(|_| io::Error::other("audio buffer lock poisoned"))?;
-                    guard.read(self.position, end)
-                };
-                if bytes.is_empty() {
-                    return Ok(0);
-                }
-                out[..bytes.len()].copy_from_slice(&bytes);
-                self.position += bytes.len();
-                return Ok(bytes.len());
+                let want = out.len().min(available.min(total) - self.position);
+                // Straight into the decoder's buffer: one copy, no intermediate Vec per read.
+                let copied = self
+                    .buffer
+                    .lock()
+                    .map_err(|_| io::Error::other("audio buffer lock poisoned"))?
+                    .read_into(self.position, &mut out[..want]);
+                self.position += copied;
+                return Ok(copied);
             }
             /*
              * A failed download reports EOF rather than an error. The decoder then finishes the
@@ -310,31 +305,38 @@ impl NativeAudio {
             .lock()
             .map_err(|_| "native audio lock poisoned".to_string())?;
 
-        if slot.is_none() {
-            let (tx, rx) = mpsc::channel();
-            let (ready_tx, ready_rx) = mpsc::channel();
-            let app = self.app.clone();
-            let commands = tx.clone();
-            let device = self
-                .pending_device
-                .lock()
-                .map_err(|_| "native audio lock poisoned".to_string())?
-                .clone();
-            std::thread::Builder::new()
-                .name("zuno-audio".into())
-                .spawn(move || run(app, rx, commands, ready_tx, device))
-                .map_err(|error| format!("audio thread failed to start: {error}"))?;
-
-            ready_rx
-                .recv()
-                .map_err(|_| "audio thread stopped before it was ready".to_string())??;
-            *slot = Some(tx);
+        // Stopping an engine that never started has nothing to do, and must not open a device.
+        if slot.is_none() && matches!(command, Command::Stop) {
+            return Ok(());
         }
+        let command = match slot.as_ref() {
+            Some(sender) => match sender.send(command) {
+                Ok(()) => return Ok(()),
+                // The thread died (a panic): start a fresh one rather than fail forever.
+                Err(mpsc::SendError(command)) => command,
+            },
+            None => command,
+        };
 
-        slot.as_ref()
-            .expect("sender was just installed")
-            .send(command)
-            .map_err(|_| "audio thread is gone".to_string())
+        let (tx, rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let app = self.app.clone();
+        let commands = tx.clone();
+        let device = self
+            .pending_device
+            .lock()
+            .map_err(|_| "native audio lock poisoned".to_string())?
+            .clone();
+        std::thread::Builder::new()
+            .name("zuno-audio".into())
+            .spawn(move || run(app, rx, commands, ready_tx, device))
+            .map_err(|error| format!("audio thread failed to start: {error}"))?;
+        ready_rx
+            .recv()
+            .map_err(|_| "audio thread stopped before it was ready".to_string())??;
+        tx.send(command).map_err(|_| "audio thread is gone".to_string())?;
+        *slot = Some(tx);
+        Ok(())
     }
 
     /**
@@ -342,28 +344,27 @@ impl NativeAudio {
      *
      * Before the thread exists this only records the preference for the next lazy start — it
      * does not claim a device handle early, the same laziness `send` documents above. Once the
-     * thread is running, `pending_device` is never looked at again, so a change from here on
-     * hot-swaps the live stream instead.
+     * thread is running, a change hot-swaps the live stream; `pending_device` is still kept
+     * current for a thread restarted after a panic.
      */
     pub(crate) fn set_output_device(&self, id: Option<String>) -> Result<(), String> {
+        // Recorded either way, so a thread started or restarted later opens the latest choice.
+        *self
+            .pending_device
+            .lock()
+            .map_err(|_| "native audio lock poisoned".to_string())? = id.clone();
         let sender = self
             .sender
             .lock()
             .map_err(|_| "native audio lock poisoned".to_string())?
             .clone();
-
-        let Some(sender) = sender else {
-            *self
-                .pending_device
-                .lock()
-                .map_err(|_| "native audio lock poisoned".to_string())? = id;
-            return Ok(());
-        };
+        let Some(sender) = sender else { return Ok(()) };
 
         let (tx, rx) = mpsc::channel();
-        sender
-            .send(Command::SetOutputDevice { id, reply: tx })
-            .map_err(|_| "audio thread is gone".to_string())?;
+        // A dead thread is fine: the next command restarts it on the device recorded above.
+        if sender.send(Command::SetOutputDevice { id, reply: tx }).is_err() {
+            return Ok(());
+        }
         rx.recv().map_err(|_| "audio thread dropped the request".to_string())?
     }
 }
