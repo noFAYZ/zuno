@@ -5915,6 +5915,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "webkit2gtk-nvidia-quirk"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f825e744183ae3171ad2f02f3148398cf2ca02ea6bbb25b51bd5fa2fabdc1e5"
+
+[[package]]
 name = "webkit2gtk-sys"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6925,6 +6931,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "url",
+ "webkit2gtk-nvidia-quirk",
  "webview2-com",
  "windows 0.61.3",
 ]

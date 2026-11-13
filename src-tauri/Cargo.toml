@@ -87,6 +87,7 @@ windows = { version = "0.61.3", features = [
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
 # Already in the tree via tauri; used to size the sign-in window's address bar in GTK's box.
 gtk = "0.18"
+webkit2gtk-nvidia-quirk = "2.3.0"
 
 
 # Smaller binary, less mapped code. No `panic = "abort"`: an audio-thread panic must not kill the app.
