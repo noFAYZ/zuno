@@ -21,14 +21,22 @@ fn main() {
     // Ensure the app never inherits that overlay.
     std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
 
-    // ponytail: NVIDIA only, since that is every report so far; widen the check if other GPUs show up.
-    // WebKitGTK's DMA-BUF renderer kills the app on NVIDIA under Wayland ("Error 71", #140, #125).
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
-        && std::env::var_os("WAYLAND_DISPLAY").is_some()
-        && std::path::Path::new("/proc/driver/nvidia/version").exists()
     {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // Niri requires explicit sync to be suppressed on NVIDIA to prevent missing-acquire-point
+        // buffer stalls and hover-only partial damage repaints.
+        let is_niri = std::env::var_os("NIRI_SOCKET").is_some()
+            || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|v| v.eq_ignore_ascii_case("niri"));
+        let disable_dmabuf = std::env::args().any(|arg| arg == "--disable-dmabuf-renderer");
+        let disable_nv_sync = std::env::args().any(|arg| arg == "--disable-nv-explicit-sync")
+            || (is_niri
+                && webkit2gtk_nvidia_quirk::is_primary_gpu_nvidia()
+                && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none());
+
+        let options = webkit2gtk_nvidia_quirk::ApplyWorkaroundOptions::default()
+            .force_disable_dmabuf(disable_dmabuf)
+            .force_disable_nv_explicit_sync(disable_nv_sync);
+        webkit2gtk_nvidia_quirk::apply_workaround_with_options(options);
     }
 
     zuno_lib::run()

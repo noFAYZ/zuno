@@ -158,22 +158,34 @@ gst-inspect-1.0 | grep -E 'avdec_aac|avdec_h264'
 <details>
 <summary>⬜ A blank grey window</summary>
 
-A WebKitGTK rendering problem under Wayland, most often on Nvidia. On Wayland with the Nvidia
-driver, Zuno sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself. Anywhere else, launch from a
-terminal with one of:
+A WebKitGTK rendering problem on Linux systems with the proprietary Nvidia driver.
+Zuno uses `webkit2gtk-nvidia-quirk` to detect Nvidia hardware and apply the appropriate workaround
+for your session:
+- **X11 or Hyprland**: Disables the DMA-BUF renderer (`WEBKIT_DISABLE_DMABUF_RENDERER=1`) to prevent blank windows and protocol crashes.
+- **Wayland (strict-sync compositors like KWin, or Niri)**: Disables explicit sync (`__NV_DISABLE_EXPLICIT_SYNC=1`) to avoid missing acquire-point protocol crashes (WebKit Bug #280210) while preserving smooth DMA-BUF hardware acceleration.
+- **Wayland (with egl-wayland2)**: Runs without workarounds for maximum performance where supported.
+
+If any WebKit rendering or Nvidia sync variable is set in your environment, existing configuration
+is left untouched. To manually specify a workaround from a terminal:
 
 ```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
-WEBKIT_DISABLE_COMPOSITING_MODE=1 zuno
-GDK_BACKEND=x11 zuno
+zuno --disable-nv-explicit-sync             # Wayland (KWin, Mutter, Niri, Sway)
+zuno --disable-dmabuf-renderer              # X11 or Hyprland
+GDK_BACKEND=x11 zuno                        # Force XWayland fallback
 ```
 
-Launching from an app menu instead? Add the same variable to the `Exec` line of
+When diagnosing rendering issues or filing a bug report, launch with diagnostic logging:
+```bash
+WEBKIT2GTK_NVIDIA_QUIRK_VERBOSE=2 zuno
+```
+
+Launching from an app menu instead? Add the CLI flag to the `Exec` line of
 `zuno.desktop` (typically `/usr/share/applications/zuno.desktop`, or
 `~/.local/share/applications/zuno.desktop` for a user install):
 
-```
-Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
+```ini
+Exec=zuno --disable-nv-explicit-sync        # Wayland
+# Exec=zuno --disable-dmabuf-renderer       # X11 or Hyprland
 ```
 
 </details>
