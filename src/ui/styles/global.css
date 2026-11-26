@@ -148,8 +148,8 @@ body,
      The mini-player window enforces the same with `!important` in mini.html. */
   background: transparent;
   color: var(--color-foreground);
-  font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
-    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  font-family: "Inter Variable", "Noto Sans Arabic", ui-sans-serif, system-ui, -apple-system,
+    Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
   /*
    * `cv11` gives Inter the single-storey `l`/`g` that reads closer to a geometric UI face,
    * and tabular numerals stop timers and durations from jittering as the digits change.
@@ -529,10 +529,11 @@ html[data-fx-off~="marquee"] .animate-marquee-vertical {
   -webkit-text-fill-color: transparent;
 }
 
-/* For RTL Arabic language */
+/* For RTL Arabic/Persian language */
 [dir="rtl"] .lyric-sweep,
 .lyric-sweep[dir="rtl"],
 .lyric-sweep:dir(rtl) {
+  letter-spacing: normal;
   background-image: linear-gradient(
     270deg,
     var(--color-foreground) calc(var(--sweep, 0%) - 4%),
