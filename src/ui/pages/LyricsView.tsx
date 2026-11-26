@@ -74,6 +74,8 @@ const STATUS_DOT: Record<LyricsSourceStatus, string> = {
 };
 
 const ARROW_KEYS = ["ArrowDown", "ArrowUp", "Home", "End"];
+const RTL_SCRIPT_RE =
+  /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
 
 interface LyricsViewProps {
   onClose: () => void;
@@ -554,7 +556,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
 
               {!isLoading && hasLines && (
                 <div
-                  className="flex flex-col pl-5"
+                  className="flex flex-col px-5"
                   style={{
                     /* Multiplied rather than replaced: the clamp still does the adapting, the
                        preference just moves the whole scale up or down with it. */
@@ -589,11 +591,15 @@ export function LyricsView({ onClose }: LyricsViewProps) {
                       <p
                         key={`${index}:${line.text}`}
                         ref={(element) => registerLine(index, element)}
-                        className="text-pretty py-1 leading-relaxed text-foreground/85"
+                        dir="auto"
+                        className="text-pretty py-1 leading-relaxed text-foreground/85 [unicode-bidi:plaintext]"
                       >
                         {line.text}
                         {translations?.[index] && (
-                          <span className="mt-0.5 block text-[0.72em] text-muted-foreground">
+                          <span
+                            dir="auto"
+                            className="mt-0.5 block text-[0.72em] text-muted-foreground [unicode-bidi:plaintext]"
+                          >
                             {translations[index]}
                           </span>
                         )}
@@ -703,8 +709,7 @@ const SyncedLine = memo(function SyncedLine({
     [index, register],
   );
 
-  // Check if there's letters
-  const isArabic = /[\u0600-\u06FF]/.test(text);
+  const isRtl = RTL_SCRIPT_RE.test(text);
 
   // An empty LRC line is a real instrumental beat, not junk. It keeps its slot so the timing
   // stays honest, and announces itself when it comes up.
@@ -734,14 +739,17 @@ const SyncedLine = memo(function SyncedLine({
     <button
       ref={attach}
       type="button"
-      // The direction of the language
-      dir={isArabic ? "rtl" : "ltr"}
+      dir={isRtl ? "rtl" : "ltr"}
       tabIndex={isTabbable ? 0 : -1}
       aria-current={isActive ? "true" : undefined}
       onFocus={() => onFocusLine(index)}
-      // Using (text-start) instead of (text-left)
       className={cn(
-        "group relative origin-left text-pretty text-start font-bold leading-[1.16] tracking-[-0.035em]",
+        "group relative text-pretty text-start font-bold",
+        /* RTL/Arabic cursive script breaks ligatures under negative tracking and clips tall
+           ascenders/descenders in WebKitGTK when line-height is tight or background-clip is active. */
+        isRtl
+          ? "origin-right py-[0.1em] leading-[1.6] tracking-normal [unicode-bidi:plaintext]"
+          : "origin-left leading-[1.16] tracking-[-0.035em]",
         "transition-[opacity,color] duration-500 ease-out",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         /*
@@ -758,13 +766,11 @@ const SyncedLine = memo(function SyncedLine({
     >
       {/* The one piece of brand colour on the screen, and the only thing marking which line
           is playing when the sweep is at either end. */}
-      
-      {/* Posistion the highlight indicator on the right for Arabic (RTL), and on the left for (LTR) Languages */}
       <span
         aria-hidden="true"
         className={cn(
-          "absolute top-[0.28em] h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
-          isArabic ? "-right-5" : "-left-5",
+          "absolute h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
+          isRtl ? "-right-5 top-[0.45em]" : "-left-5 top-[0.28em]",
           isActive ? "opacity-100" : "opacity-0 group-hover:opacity-40",
         )}
       />
@@ -772,7 +778,10 @@ const SyncedLine = memo(function SyncedLine({
       {/* Sized in `em` so it tracks the line it belongs to, and deliberately quieter: it is
           a gloss on the lyric, not a second lyric competing with it. */}
       {translation && (
-        <span className="mt-1 block text-[0.62em] font-medium leading-snug text-muted-foreground">
+        <span
+          dir="auto"
+          className="mt-1 block text-[0.62em] font-medium leading-snug text-muted-foreground [unicode-bidi:plaintext]"
+        >
           {translation}
         </span>
       )}
