@@ -15,7 +15,7 @@ export const TRANSLATION_OFF = "off";
 /** Codes the endpoint accepts; the labels come from the platform, not from a table here. */
 export const TRANSLATION_LANGUAGES = [
   "en", "es", "fr", "de", "it", "pt", "ru", "tr", "ar", "hi",
-  "ur", "ja", "ko", "zh-CN", "id", "vi", "th", "pl", "nl", "sv",
+  "ur", "fa", "ja", "ko", "zh-CN", "id", "vi", "th", "pl", "nl", "sv",
 ];
 
 /**
